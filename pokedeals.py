@@ -359,7 +359,7 @@ def jp_identify(listing: Listing, cfg: dict, store: Store, language: str = "japa
     if pc_token(cfg):
         q = search + (" japanese" if language == "japanese" else "")
         p = pc_product(q, cfg, store)
-        if p and p.get("name") and p["name"].split()[0].lower() in listing.text:
+        if p and p.get("name") and _pokemon_matches(p["name"], listing.text):
             flag = "🇯🇵 " if language == "japanese" else ""
             return {"name": f"{flag}{p['name']} ({p['set']})", "ppt_search": search,
                     "pc_query": q, "language": language, "auto": True}
@@ -368,7 +368,7 @@ def jp_identify(listing: Listing, cfg: dict, store: Store, language: str = "japa
     c = ppt_card(search, cfg, store, language)
     if not c or not c.get("name"):
         return None
-    if c["name"].split()[0].lower() not in listing.text:
+    if not _pokemon_matches(c["name"], listing.text):
         return None  # resultaat lijkt niet op de advertentie
     flag = "🇯🇵 " if language == "japanese" else ""
     return {"name": f"{flag}{c['name']} ({c['set']})", "ppt_search": search,
@@ -423,13 +423,29 @@ SYMBOLS = {"◇": ("prism", "◇"), "☆": ("star", "☆", "★"), "★": ("star
            "δ": ("delta", "δ"), "♀": ("♀", "female", "nidoran"), "♂": ("♂", "male", "nidoran")}
 
 
+NAME_SKIP = {"ex", "gx", "v", "vmax", "vstar", "m", "mega", "dark", "light", "radiant", "shining",
+             "the", "of", "with", "and", "team", "rocket's", "rockets", "s", "lv", "x", "break"}
+
+
+def _tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-zé]+", text.lower()))
+
+
 def _name_words(name: str) -> list[str]:
     return [w for w in re.findall(r"[a-zé]+", name.lower()) if len(w) > 1]
 
 
+def _pokemon_matches(name: str, text: str) -> bool:
+    """De Pokémon-naam (hele woorden, zonder ex/V/M e.d.) moet in de advertentie staan."""
+    toks = _tokens(text)
+    core = [w for w in _name_words(name) if w not in NAME_SKIP]
+    return bool(core) and all(w in toks for w in core)
+
+
 def _name_in_text(name: str, text: str) -> bool:
     words = _name_words(name)
-    if not words or not all(w in text for w in words):
+    toks = _tokens(text)
+    if not words or not all(w in toks for w in words):
         return False
     # speciale kaarten (Prism Star, Gold Star, Delta) alleen als dat ook in de advertentie staat
     for sym, alts in SYMBOLS.items():
@@ -450,7 +466,7 @@ def tcgdex_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
             if res is None:
                 return None
             cands += [c for c in res if isinstance(c, dict)]
-        hits = [c for c in cands if c.get("name") and c["name"].split()[0].lower() in t]
+        hits = [c for c in cands if c.get("name") and _pokemon_matches(c["name"], t)]
         good = []
         for c in {c["id"]: c for c in hits}.values():
             if len(good) > 1:
@@ -530,7 +546,7 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
         store.cache_put(key, cached)
     # kies de kaart waarvan de Pokemon-naam in de titel staat
     t = listing.text
-    hits = [c for c in cached if c["name"].split()[0].lower() in t]
+    hits = [c for c in cached if _pokemon_matches(c["name"], t)]
     if not cached:
         return jp_identify(listing, cfg, store, "english")
     if len(hits) != 1:

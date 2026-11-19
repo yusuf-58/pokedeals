@@ -384,3 +384,11 @@ def test_prism_star_not_matched_to_normal():
     assert pd._name_in_text("Giratina ◇", "giratina prism star ultra prism")
     assert pd._name_in_text("Charizard VMAX", "charizard vmax shiny")
     assert not pd._name_in_text("Mewtwo ☆", "mewtwo ex")
+
+
+def test_whole_word_name_matching():
+    t = "pokemon kaart; porygon-z, 6/106, holo"
+    assert not pd._pokemon_matches("M Charizard EX", t)
+    assert pd._pokemon_matches("Porygon-Z", t)
+    assert not pd._pokemon_matches("Mew", "mewtwo gx 12/100")
+    assert pd._pokemon_matches("Umbreon VMAX", "moonbreon umbreon vmax 215/203")
