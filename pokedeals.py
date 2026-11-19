@@ -353,6 +353,101 @@ def jp_identify(listing: Listing, cfg: dict, store: Store, language: str = "japa
             "language": language, "auto": True}
 
 
+# ---------------------------------------------------------------- TCGdex (gratis, geen key)
+TCGDEX = "https://api.tcgdex.net/v2/en"
+_tcgdex_calls = [0]
+
+
+def tcgdex_get(path: str, params: dict | None, store: Store):
+    key = "tcgdex:" + path + ("?" + "&".join(f"{k}={v}" for k, v in sorted(params.items())) if params else "")
+    cached = store.cache_get(key)
+    if cached is not None:
+        return cached
+    if _tcgdex_calls[0] >= 300:           # netjes blijven per run
+        return None
+    _tcgdex_calls[0] += 1
+    try:
+        r = requests.get(TCGDEX + path, params=params, timeout=20, headers={"User-Agent": "PokeDeals"})
+        if r.status_code == 404:
+            data = []
+        else:
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        log.info("TCGdex fout (%s): %s", path, e)
+        return None
+    store.cache_put(key, data)
+    return data
+
+
+def tcgdex_price(card: dict, fx: float) -> float | None:
+    """Cardmarket (EUR) uit TCGdex; anders TCGplayer (USD->EUR). Voorzichtig: laagste van avg30/trend."""
+    p = (card or {}).get("pricing") or {}
+    cm = p.get("cardmarket") or {}
+    vals = [v for v in (_num(cm.get("avg30")), _num(cm.get("trend")), _num(cm.get("avg"))) if v]
+    if vals:
+        return round(min(vals[:2] or vals), 2)
+    tp = p.get("tcgplayer") or {}
+    mk = []
+    for var in tp.values():
+        if isinstance(var, dict):
+            m = _num(var.get("marketPrice")) or _num(var.get("market")) or _num(var.get("midPrice"))
+            if m:
+                mk.append(m)
+    return round(min(mk) * fx, 2) if mk else None
+
+
+def _name_in_text(name: str, text: str) -> bool:
+    words = [w for w in re.findall(r"[a-zé]+", name.lower()) if len(w) > 1]
+    return bool(words) and all(w in text for w in words)
+
+
+def tcgdex_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
+    """Herken Engelse kaart via TCGdex: met nummer (215/203) of op naam (voorzichtig)."""
+    t = listing.text
+    m = NUM_RE.search(listing.title) or NUM_RE.search(listing.description)
+    if m:
+        num, total = m.group(1).upper(), m.group(2)
+        cands = []
+        for lid in {num, num.lstrip("0") or num}:
+            res = tcgdex_get("/cards", {"localId": lid}, store)
+            if res is None:
+                return None
+            cands += [c for c in res if isinstance(c, dict)]
+        hits = [c for c in cands if c.get("name") and c["name"].split()[0].lower() in t]
+        good = []
+        for c in {c["id"]: c for c in hits}.values():
+            if len(good) > 1:
+                break
+            d = tcgdex_get(f"/cards/{c['id']}", None, store)
+            if not d:
+                continue
+            off = ((d.get("set") or {}).get("cardCount") or {}).get("official")
+            if total.isdigit() and off and int(off) != int(total):
+                continue
+            good.append(d)
+        if len(good) != 1:
+            return None
+        d = good[0]
+        return {"name": f"{d['name']} {num}/{total} ({(d.get('set') or {}).get('name', '')})",
+                "tcgdex_ids": [d["id"]], "ppt_search": f"{d['name']} {num}", "auto": True}
+    # zonder nummer: naam zoeken, alle versies die passen -> laagste prijs (voorzichtig)
+    words = [w for w in re.findall(r"[a-zA-Zé]+", listing.title) if w.lower() not in STOP and len(w) > 2]
+    for w in words[:2]:
+        res = tcgdex_get("/cards", {"name": w}, store)
+        if not res:
+            continue
+        fits = [c for c in res if isinstance(c, dict) and c.get("name") and _name_in_text(c["name"], t)]
+        if not fits:
+            continue
+        longest = max(len(c["name"]) for c in fits)            # "Charizard VMAX" > "Charizard"
+        fits = [c for c in fits if len(c["name"]) == longest][:8]
+        return {"name": f"{fits[0]['name']} (versie onzeker, laagste prijs)",
+                "tcgdex_ids": [c["id"] for c in fits], "ppt_search": fits[0]["name"],
+                "auto": True, "uncertain": len(fits) > 1}
+    return None
+
+
 NUM_RE = re.compile(r"\b([a-z]{0,3}\d{1,3})\s*/\s*([a-z]{0,3}\d{1,3})\b", re.I)
 JUNK_RE = re.compile(r"\b(proxy|fake|replica|custom|orica|metal|goud|gold card)\b", re.I)
 
@@ -364,6 +459,12 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
     if is_japanese(listing.text):
         return jp_identify(listing, cfg, store)
     m = NUM_RE.search(listing.title) or NUM_RE.search(listing.description)
+    no_price = not listing.price_eur and listing.price_type in ("SEE_DESCRIPTION", "NOTK", "FAST_BID", "MIN_BID", "BID")
+    worth = no_price or (listing.price_eur and listing.price_eur >= float(cfg.get("title_lookup_min_price", 15)))
+    if cfg.get("use_tcgdex", True) and (m or worth):
+        c = tcgdex_identify(listing, cfg, store)
+        if c:
+            return c
     if not m:
         # geen kaartnummer: probeer de titel zelf (bv. "Charizard VMAX rainbow")
         no_price = not listing.price_eur and listing.price_type in ("SEE_DESCRIPTION", "NOTK", "FAST_BID", "MIN_BID", "BID")
@@ -637,12 +738,24 @@ def get_values(card: dict, cfg: dict, store: Store, want_graded: bool = False) -
                     setattr(pv, attr, float(card[ck]))
             return pv
     v = Values()
-    key = "val:" + (card.get("pokemontcg_id") or card["name"])
+    key = "val:" + ",".join(card.get("tcgdex_ids") or []) + (card.get("pokemontcg_id") or card["name"])
     cached = store.cache_get(key)
     if cached:
         v = Values(**cached)
     else:
-        if lang == "english" and card.get("pokemontcg_id"):
+        if lang == "english" and cfg.get("use_tcgdex", True):
+            ids = card.get("tcgdex_ids") or ([card["pokemontcg_id"]] if card.get("pokemontcg_id") else [])
+            fx = float(cfg.get("usd_to_eur", 0.92))
+            prices = []
+            for i in ids[:8]:
+                d = tcgdex_get(f"/cards/{i}", None, store)
+                pr = tcgdex_price(d, fx) if d else None
+                if pr:
+                    prices.append(pr)
+            if prices:
+                v.raw = min(prices)
+                v.sources.append("Cardmarket (TCGdex)" + (" laagste versie" if len(prices) > 1 else ""))
+        if not v.raw and lang == "english" and card.get("pokemontcg_id"):
             tcg_key = os.getenv("POKEMONTCG_API_KEY") or cfg.get("pokemontcg_api_key") or ""
             try:
                 v.raw = price_pokemontcg(card["pokemontcg_id"], tcg_key)

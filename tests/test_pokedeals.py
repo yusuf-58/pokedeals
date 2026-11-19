@@ -318,3 +318,40 @@ def test_ppt_429_stops_for_day(tmp_path):
     with mock.patch.object(pd.requests, "get", return_value=r) as g:
         pd.ppt_card("a", cfg, store, "english"); pd.ppt_card("b", cfg, store, "english")
     assert g.call_count == 1
+
+
+def _resp(data, status=200):
+    r = mock.Mock(); r.status_code = status; r.ok = status < 400
+    r.raise_for_status = lambda: None; r.json = lambda: data
+    return r
+
+
+def test_tcgdex_number_and_name(tmp_path):
+    store = pd.Store(tmp_path / "t.db")
+    def fake_get(url, params=None, **k):
+        if url.endswith("/cards") and params.get("localId") == "215":
+            return _resp([{"id": "swsh7-215", "localId": "215", "name": "Umbreon VMAX"},
+                          {"id": "xx-215", "localId": "215", "name": "Pikachu"}])
+        if url.endswith("/cards/swsh7-215"):
+            return _resp({"id": "swsh7-215", "name": "Umbreon VMAX",
+                          "set": {"name": "Evolving Skies", "cardCount": {"official": 203}},
+                          "pricing": {"cardmarket": {"avg30": 1100.0, "trend": 1200.0}}})
+        if url.endswith("/cards") and params.get("name") == "Charizard":
+            return _resp([{"id": "a", "name": "Charizard VMAX"}, {"id": "b", "name": "Charizard VMAX"},
+                          {"id": "c", "name": "Charizard"}, {"id": "d", "name": "Charizard ex"}])
+        if url.endswith("/cards/a"):
+            return _resp({"id": "a", "pricing": {"cardmarket": {"avg30": 300.0, "trend": 320.0}}})
+        if url.endswith("/cards/b"):
+            return _resp({"id": "b", "pricing": {"tcgplayer": {"holofoil": {"marketPrice": 100.0}}}})
+        return _resp([], 404)
+    with mock.patch.object(pd.requests, "get", side_effect=fake_get):
+        l = pd.parse_mp_listing(mp("1", "Umbreon VMAX 215/203 NM", 50000))
+        c = pd.auto_identify(l, CFG, store)
+        assert c and c["tcgdex_ids"] == ["swsh7-215"]
+        v = pd.get_values(c, CFG, store)
+        assert v.raw == 1100.0 and "TCGdex" in v.sources[0]
+        l2 = pd.parse_mp_listing(mp("2", "Charizard VMAX shiny", 5000))
+        c2 = pd.auto_identify(l2, CFG, store)
+        assert c2 and set(c2["tcgdex_ids"]) == {"a", "b"} and c2["uncertain"]
+        v2 = pd.get_values(c2, CFG, store)
+        assert v2.raw == 92.0          # laagste versie (100 USD)
