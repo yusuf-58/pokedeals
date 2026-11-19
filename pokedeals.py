@@ -877,7 +877,7 @@ def seller_message(d: Deal, offer: int, cfg: dict) -> str:
     kaart = d.listing.title[:60]
     return (f"Hoi! Ik heb interesse in je {kaart}. Is hij nog beschikbaar? "
             f"Ik zou hem graag voor €{offer} willen kopen, ik kan snel betalen "
-            f"en hem ophalen of laten verzenden. Laat maar weten! Groetjes, {naam}")
+            f"en hem ophalen of laten verzenden. Laat maar weten! Groetjes!")
 
 
 def deal_embed(d: Deal, cfg: dict) -> dict:
@@ -1035,7 +1035,7 @@ def send_bid_chance(cfg: dict, l: Listing, card: dict, b: dict):
     naam = (cfg.get("negotiation") or {}).get("your_name", "Yusuf")
     msg = (f"Hoi! Ik heb interesse in je {l.title[:60]}. Is hij nog beschikbaar? "
            f"Ik zou €{open_bid} willen bieden, ik kan snel betalen en hem ophalen of laten verzenden. "
-           f"Groetjes, {naam}")
+           f"Groetjes!")
     title = f"💬 Bod-kans: {card['name']}"[:256]
     fields = [
         {"name": "📈 Marktwaarde", "value": f"€{b['market']:.0f} ({b['grade']})", "inline": True},
