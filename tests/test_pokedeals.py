@@ -75,7 +75,7 @@ def test_run_once_full_flow(tmp_path):
     old = [pd.parse_mp_listing(mp("old", "Moonbreon", 50000))]
     new = [pd.parse_mp_listing(mp("new", "Umbreon VMAX 215 alt art", 60000))] + old
     sent = []
-    with mock.patch.object(pd, "fetch_marktplaats", side_effect=[old] * 3 + [new] * 3), \
+    with mock.patch.object(pd, "fetch_marktplaats", side_effect=[old] * len(CFG["searches"]) + [new] * len(CFG["searches"])), \
          mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000, psa9=1300, psa10=2800)), \
          mock.patch.object(pd, "send_deal", side_effect=lambda c, d: sent.append(pd.format_deal(d)[0])), \
          mock.patch.object(pd.time, "sleep"):
