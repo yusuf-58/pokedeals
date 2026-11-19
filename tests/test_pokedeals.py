@@ -74,7 +74,7 @@ def test_find_grade_shapes():
 
 def test_run_once_full_flow(tmp_path):
     store = pd.Store(tmp_path / "t.db")
-    cfg = {**CFG, "backfill_pages": 0, "daily_summary_hour": -1}
+    cfg = {**CFG, "backfill_pages": 0, "daily_summary_hour": -1, "batch_minutes": 0}
     old = [pd.parse_mp_listing(mp("old", "Moonbreon", 50000))]
     new = [pd.parse_mp_listing(mp("new", "Umbreon VMAX 215 alt art", 60000))] + old
     n = len(cfg["searches"])
@@ -407,13 +407,12 @@ def test_batch_mode(tmp_path):
          mock.patch.object(pd, "send_deal", side_effect=lambda c, d: sent.append(d.listing.id)), \
          mock.patch.object(pd.time, "sleep"):
         pd.run_once(cfg, store)
-        assert sent[0] == "top"                       # topdeal meteen
-        assert sent[1:] == ["m0", "m1"]               # daarna beste 2 (hoogste winst)
-        pd.run_once(cfg, store)                       # binnen 30 min: niks extra
-        assert len(sent) == 3
-        store.kv_set("last_flush", 0)                 # 30 min later
+        assert sent == ["top", "m0"]                  # raw-topdeal gaat via de batch, beste eerst
+        pd.run_once(cfg, store)                       # binnen het kwartier: niks extra
+        assert len(sent) == 2
+        store.kv_set("last_flush", 0)                 # later
         pd.flush_queue(cfg, store)
-    assert sent[3:] == ["m2", "m3"]
+    assert sent[2:] == ["m1", "m2"]
 
 
 def test_highest_bid_blocks_bid_chance():
