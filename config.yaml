@@ -13,6 +13,8 @@ searches:
   - "pokemon psa"
   - "pokemon kaart"
   - "pokemon kaarten"
+  - "pokemon japans"
+  - "pokemon holo"
 
 # Meldingen via Discord (aanrader). Webhook-URL als GitHub secret DISCORD_WEBHOOK,
 # niet hier invullen (je repo is openbaar).
@@ -43,8 +45,8 @@ pokemontcg_api_key: ""
 usd_to_eur: 0.92         # omrekening voor eBay-prijzen in dollars
 
 # Wanneer is iets een deal?
-min_profit_eur: 15       # minimaal zoveel netto winst
-min_margin_pct: 20       # en minimaal zoveel % winst op je inkoop
+min_profit_eur: 5        # minimaal zoveel netto winst (na alle kosten)
+min_margin_pct: 5        # en minimaal zoveel % winst op je inkoop
 
 # Kosten (pas aan naar jouw situatie)
 costs:

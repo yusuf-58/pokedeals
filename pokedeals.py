@@ -640,9 +640,11 @@ def deal_buttons(url: str) -> list:
 
 
 def send_deal_bot(token: str, channel: str, d: Deal, cfg: dict):
+    top = d.profit >= 50 or d.margin_pct >= 30
+    head = f"@here 🔥 **TOPDEAL: +€{d.profit:.0f}**" if top else f"💰 Deal: +€{d.profit:.0f} ({d.margin_pct:.0f}%)"
     r = requests.post(f"https://discord.com/api/v10/channels/{channel}/messages",
                       headers={"Authorization": f"Bot {token}"}, timeout=15,
-                      json={"content": f"@here 💰 **Deal: +€{d.profit:.0f}**",
+                      json={"content": head,
                             "embeds": [deal_embed(d, cfg)],
                             "components": deal_buttons(d.listing.url),
                             "allowed_mentions": {"parse": ["everyone"]}})
