@@ -272,3 +272,30 @@ def test_pricecharting(tmp_path):
                                                "console-name": "Pokemon Evolving Skies", "loose-price": 100000}
     with mock.patch.object(pd.requests, "get", return_value=resp2), mock.patch.object(pd.time, "sleep"):
         assert pd.get_values(sealed, cfg, store).raw == 920.0
+
+
+def test_bid_chance_and_stats(tmp_path):
+    store = pd.Store(tmp_path / "s.db")
+    card = REAL_CFG["watchlist"][0]
+    v = pd.Values(raw=900, sources=["x"])
+    l = pd.parse_mp_listing(mp("bc", "Moonbreon umbreon vmax", 0, "SEE_DESCRIPTION"))
+    b = pd.bid_chance(l, card, v, REAL_CFG)
+    assert b and b["max_bid"] > 500
+    assert pd.bid_chance(l, card, pd.Values(raw=100), REAL_CFG) is None      # te weinig waard
+    l2 = pd.parse_mp_listing(mp("bc2", "Moonbreon played", 0, "SEE_DESCRIPTION"))
+    assert pd.bid_chance(l2, card, v, REAL_CFG) is None                      # slechte staat
+    sent = []
+    cheap = pd.parse_mp_listing(mp("n1", "Moonbreon umbreon vmax", 80000))  # bijna-deal
+    with mock.patch.object(pd, "fetch_marktplaats", side_effect=[[]] * 5 + [[l, cheap]] + [[]] * 4), \
+         mock.patch.object(pd, "get_values", return_value=v), \
+         mock.patch.object(pd, "send_bid_chance", side_effect=lambda *a: sent.append("bid")), \
+         mock.patch.object(pd, "send_daily_summary", side_effect=lambda *a: sent.append("sum")), \
+         mock.patch.object(pd.time, "sleep"):
+        store.mark("dummy")
+        pd.run_once({**REAL_CFG, "daily_summary_hour": 0}, store)
+        pd.run_once({**REAL_CFG, "daily_summary_hour": 0}, store)
+    day = pd.local_now().strftime("%Y-%m-%d")
+    st = store.stats(day)
+    assert st["new"] == 2 and st["identified"] == 2 and st["bids"] == 1
+    assert sent.count("bid") == 1 and sent.count("sum") == 1                 # overzicht maar 1x
+    assert store.best(day)[0] > 0

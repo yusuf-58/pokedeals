@@ -85,7 +85,25 @@ class Store:
         self.db = sqlite3.connect(path)
         self.db.execute("CREATE TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS prices (key TEXT PRIMARY KEY, ts REAL, data TEXT)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS stats (day TEXT, k TEXT, v REAL, PRIMARY KEY(day, k))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS best (day TEXT PRIMARY KEY, profit REAL, txt TEXT)")
         self.db.commit()
+
+    def inc(self, day: str, k: str, n: float = 1):
+        self.db.execute("INSERT INTO stats VALUES (?,?,?) ON CONFLICT(day,k) DO UPDATE SET v=v+?",
+                        (day, k, n, n))
+        self.db.commit()
+
+    def stats(self, day: str) -> dict:
+        return {k: v for k, v in self.db.execute("SELECT k, v FROM stats WHERE day=?", (day,))}
+
+    def best(self, day: str, profit: float | None = None, txt: str = ""):
+        row = self.db.execute("SELECT profit, txt FROM best WHERE day=?", (day,)).fetchone()
+        if profit is not None and (row is None or profit > row[0]):
+            self.db.execute("INSERT OR REPLACE INTO best VALUES (?,?,?)", (day, profit, txt))
+            self.db.commit()
+            return profit, txt
+        return row
 
     def is_empty(self) -> bool:
         return self.db.execute("SELECT 1 FROM seen LIMIT 1").fetchone() is None
@@ -328,7 +346,8 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
     m = NUM_RE.search(listing.title) or NUM_RE.search(listing.description)
     if not m:
         # geen kaartnummer: probeer de titel zelf (bv. "Charizard VMAX rainbow")
-        if listing.price_eur and listing.price_eur >= float(cfg.get("title_lookup_min_price", 15)):
+        no_price = not listing.price_eur and listing.price_type in ("SEE_DESCRIPTION", "NOTK", "FAST_BID", "MIN_BID", "BID")
+        if no_price or (listing.price_eur and listing.price_eur >= float(cfg.get("title_lookup_min_price", 15))):
             return jp_identify(listing, cfg, store, "english")
         return None
     num, total = m.group(1).upper(), m.group(2)
@@ -846,9 +865,94 @@ def notify(cfg: dict, title: str, message: str, click: str | None = None,
 
 
 # ---------------------------------------------------------------- loop
+NO_PRICE_TYPES = ("SEE_DESCRIPTION", "NOTK", "BID", "MIN_BID", "FAST_BID", "")
+
+
+def bid_chance(l: Listing, card: dict, v: Values, cfg: dict) -> dict | None:
+    """Advertentie zonder (bruikbare) prijs maar herkende, waardevolle kaart."""
+    if l.price_eur and l.price_eur > 1:
+        return None
+    if l.price_type not in NO_PRICE_TYPES:
+        return None
+    if card.get("type") == "sealed" or BAD_COND_RE.search(l.text):
+        return None
+    grade = detect_grade(l.text)
+    if not grade and SLAB_RE.search(l.text):
+        return None
+    if grade:
+        co, num = grade.split(" ", 1)
+        market = (v.grades.get(grade) or (v.grades.get(num) if not num.startswith("10") else None)
+                  or ({"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade)))
+        fee, ship = cfg["costs"]["ebay_fee_pct"], cfg["costs"]["ebay_ship_eur"]
+    else:
+        market = v.raw
+        fee, ship = cfg["costs"]["cardmarket_fee_pct"], cfg["costs"]["cardmarket_ship_eur"]
+    if not market or market < float(cfg.get("bid_alert_min_value", 300)):
+        return None
+    sell = market * (1 - fee / 100) - ship
+    max_bid = sell - cfg["min_profit_eur"] - cfg["costs"]["buy_shipping_eur"]
+    if max_bid < 20:
+        return None
+    return {"market": round(market, 2), "sell": round(sell, 2), "max_bid": int(max_bid),
+            "grade": grade or "Raw", "source": ", ".join(v.sources)}
+
+
+def send_bid_chance(cfg: dict, l: Listing, card: dict, b: dict):
+    open_bid = _round_down(b["max_bid"] * 0.75)
+    naam = (cfg.get("negotiation") or {}).get("your_name", "Yusuf")
+    msg = (f"Hoi! Ik heb interesse in je {l.title[:60]}. Is hij nog beschikbaar? "
+           f"Ik zou €{open_bid} willen bieden, ik kan snel betalen en hem ophalen of laten verzenden. "
+           f"Groetjes, {naam}")
+    title = f"💬 Bod-kans: {card['name']}"[:256]
+    fields = [
+        {"name": "📈 Marktwaarde", "value": f"€{b['market']:.0f} ({b['grade']})", "inline": True},
+        {"name": "🎯 Max bod (voor €%d winst)" % cfg["min_profit_eur"], "value": f"€{b['max_bid']}", "inline": True},
+        {"name": "🤝 Openingsbod", "value": f"€{open_bid}", "inline": True},
+        {"name": "🔎 Prijsbron", "value": b["source"][:200] or "-", "inline": True},
+        {"name": "✉️ Bericht voor verkoper", "value": f"```{msg}```", "inline": False},
+    ]
+    token = os.getenv("DISCORD_BOT_TOKEN") or (cfg.get("discord") or {}).get("bot_token")
+    channel = os.getenv("DISCORD_CHANNEL_ID") or (cfg.get("discord") or {}).get("channel_id")
+    embed = {"title": title, "url": l.url, "color": 0x3498DB, "fields": fields,
+             "description": f"**{l.title[:200]}**\nGeen vraagprijs: verkoper wil een bod." +
+                            (f"\n📍 {l.city}" if l.city else "")}
+    if l.image:
+        embed["image"] = {"url": l.image}
+    if token and channel:
+        r = requests.post(f"https://discord.com/api/v10/channels/{channel}/messages",
+                          headers={"Authorization": f"Bot {token}"}, timeout=15,
+                          json={"content": f"💬 Bod-kans: waarde €{b['market']:.0f}",
+                                "embeds": [embed], "components": deal_buttons(l.url)})
+        if r.ok:
+            return
+        log.error("Bod-kans via bot mislukt: %s %s", r.status_code, r.text[:200])
+    notify(cfg, title, f"Waarde €{b['market']:.0f} | max bod €{b['max_bid']}\n{msg}",
+           click=l.url, image=l.image, priority=3)
+
+
+def send_daily_summary(cfg: dict, store: Store, day: str):
+    st = store.stats(day)
+    best = store.best(day)
+    lines = [
+        f"👀 Nieuwe advertenties bekeken: **{int(st.get('new', 0))}**",
+        f"🧠 Kaart herkend: **{int(st.get('identified', 0))}**",
+        f"💶 Met prijs vergeleken: **{int(st.get('valued', 0))}**",
+        f"💰 Deals gestuurd: **{int(st.get('deals', 0))}**",
+        f"💬 Bod-kansen: **{int(st.get('bids', 0))}**",
+    ]
+    if best:
+        lines.append(f"🥈 Beste bijna-deal: **€{best[0]:.0f}** winst: {best[1][:150]}")
+    lines.append(f"\nDrempel: €{cfg['min_profit_eur']} winst. Te weinig deals? Verlaag `min_profit_eur`.")
+    notify(cfg, f"📊 PokeDeals dagoverzicht {day}", "\n".join(lines), priority=3)
+
+
 def run_once(cfg: dict, store: Store) -> list[Deal]:
     first = store.is_empty() and cfg.get("skip_existing_on_first_run", True)
     deals: list[Deal] = []
+    now = local_now()
+    day = now.strftime("%Y-%m-%d")
+    loose = {**cfg, "min_profit_eur": -1e9, "min_margin_pct": -1e9}
+    n_new = n_id = n_val = 0
     for q in cfg["searches"]:
         try:
             listings = fetch_marktplaats(q, int(cfg.get("mp_limit", 30)))
@@ -861,15 +965,33 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
             store.mark(l.id)
             if first:
                 continue
+            n_new += 1
             card = match_card(l, cfg.get("watchlist") or [])
             if not card and cfg.get("auto_mode", True):
                 card = auto_identify(l, cfg, store)
             if card:
-                d = evaluate(l, card, get_values(card, cfg, store, bool(detect_grade(l.text))), cfg)
+                n_id += 1
+                v = get_values(card, cfg, store, bool(detect_grade(l.text)))
+                d = evaluate(l, card, v, cfg)
+                near = None if d else evaluate(l, card, v, loose)
+                if d or near:
+                    n_val += 1
+                if near:
+                    store.best(day, near.profit, f"{near.card['name']} voor €{l.price_eur:.0f} ({l.url})")
+                if not d and cfg.get("bid_alerts", True):
+                    b = bid_chance(l, card, v, cfg)
+                    if b:
+                        store.inc(day, "bids")
+                        log.info("BOD-KANS: %s waarde €%s", card["name"], b["market"])
+                        try:
+                            send_bid_chance(cfg, l, card, b)
+                        except Exception as e:
+                            log.error("Bod-kans melding mislukt: %s", e)
             else:
                 d = evaluate_lot(l, cfg, store)
             if d:
                 deals.append(d)
+                store.inc(day, "deals")
                 log.info("DEAL: %s", format_deal(d)[0])
                 try:
                     send_deal(cfg, d)
@@ -878,7 +1000,26 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
         time.sleep(2)  # netjes blijven tegen Marktplaats
     if first:
         log.info("Eerste run: bestaande advertenties overgeslagen.")
+    store.inc(day, "new", n_new); store.inc(day, "identified", n_id); store.inc(day, "valued", n_val)
+    log.info("Run klaar: %d nieuw, %d herkend, %d met prijs, %d deals", n_new, n_id, n_val, len(deals))
+    # dagoverzicht 1x per dag na het ingestelde uur
+    hour = int(cfg.get("daily_summary_hour", 21))
+    if hour >= 0 and now.hour >= hour and not store.stats(day).get("summary_sent"):
+        store.inc(day, "summary_sent")
+        try:
+            send_daily_summary(cfg, store, day)
+        except Exception as e:
+            log.error("Dagoverzicht mislukt: %s", e)
     return deals
+
+
+def local_now():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo(cfg_tz[0]))
+
+
+cfg_tz = ["Europe/Amsterdam"]
 
 
 def load_config(path: Path) -> dict:

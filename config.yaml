@@ -84,6 +84,13 @@ vision:
   min_listing_price: 10       # goedkopere advertenties niet scannen
   min_confidence: 0.75        # AI moet zo zeker zijn
 
+# Advertenties zonder vraagprijs ("Bieden", "n.o.t.k.") met waardevolle kaart melden
+bid_alerts: true
+bid_alert_min_value: 300     # alleen kaarten van minstens zoveel waard
+
+# Dagoverzicht in Discord (uur, Nederlandse tijd). -1 = uit
+daily_summary_hour: 21
+
 # Bij eerste start: bestaande advertenties niet melden (anders spam)
 skip_existing_on_first_run: true
 
