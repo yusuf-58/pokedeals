@@ -243,9 +243,9 @@ def fetch_highest_bid(l: Listing, store: Store | None = None) -> float | None:
     vals = []
     for block in BID_BLOCK_RE.findall(html):
         for v in BID_VAL_RE.findall(block):
-            x = float(v)
-            vals.append(x / 100 if x >= 1000 and "." not in v else x)  # centen -> euro
-    if os.getenv("POKEDEALS_DEBUG"):
+            # Marktplaats rekent intern in centen (zoals priceCents); decimalen = euro
+            vals.append(float(v) if "." in v else int(v) / 100)
+    if os.getenv("POKEDEALS_DEBUG") and vals:
         i = html.find('"bids"')
         log.info("DEBUG biedingen %s: %s | %s", l.id, vals[:5], html[i:i+200] if i >= 0 else "geen 'bids' in pagina")
     return max(vals) if vals else None
@@ -537,7 +537,8 @@ def tcgdex_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
             return len(_name_words(c["name"])) + sum(1 for sym in SYMBOLS if sym in c["name"])
         best = max(score(c) for c in fits)
         fits = [c for c in fits if score(c) == best][:8]
-        return {"name": f"{fits[0]['name']} (versie onzeker, laagste prijs)",
+        label = " (versie onzeker, laagste prijs)" if len(fits) > 1 else ""
+        return {"name": f"{fits[0]['name']}{label}",
                 "tcgdex_ids": [c["id"] for c in fits], "ppt_search": fits[0]["name"],
                 "auto": True, "uncertain": len(fits) > 1}
     return None
