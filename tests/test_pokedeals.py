@@ -140,3 +140,19 @@ def test_japanese(tmp_path):
     d = pd.evaluate(l, card, v, cfg)
     assert d and d.profit > 15
     print(pd.format_deal(d))
+
+
+def test_fallback_when_pokemontcg_dead(tmp_path):
+    store = pd.Store(tmp_path / "f.db")
+    card = CFG["watchlist"][0]
+    ppt = {"name": "Umbreon VMAX", "set": "ES", "raw": 900.0, "psa9": 1200.0, "psa10": 2500.0}
+    with mock.patch.object(pd, "price_pokemontcg", side_effect=Exception("deprecated")), \
+         mock.patch.object(pd, "ppt_card", return_value=ppt):
+        v = pd.get_values(card, CFG, store)
+    assert v.raw == 900.0 and v.psa10 == 2500.0 and "TCGplayer (PPT)" in v.sources
+    # auto-identify valt terug op PPT
+    l = pd.parse_mp_listing(mp("x", "Umbreon VMAX 215/203", 50000))
+    with mock.patch.object(pd.requests, "get", side_effect=Exception("down")), \
+         mock.patch.object(pd, "ppt_card", return_value=ppt):
+        c = pd.auto_identify(l, CFG, store)
+    assert c and c["language"] == "english"

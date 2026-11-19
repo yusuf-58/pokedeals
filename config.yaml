@@ -3,6 +3,10 @@
 # Hoe vaak checken (seconden). 60 = elke minuut.
 interval_seconds: 60
 
+# Aantal nieuwste advertenties per zoekterm per ronde
+# (bij GitHub Actions elke 5-10 min: 50 zodat je niks mist)
+mp_limit: 50
+
 # Zoektermen op Marktplaats (nieuwste advertenties eerst).
 # Elke zoekterm = 1 verzoek per ronde. Houd het klein (2-4).
 searches:
@@ -12,14 +16,16 @@ searches:
 
 # Telefoonmelding via de gratis ntfy-app (Android/iOS).
 # Kies een lange geheime naam, abonneer je in de app op precies deze naam.
+# Bij GitHub: zet hem als secret NTFY_TOPIC (dan blijft hij geheim).
 ntfy:
   server: "https://ntfy.sh"
   topic: "yusuf-pokemondeals"
 
-# API keys (optioneel maar aangeraden). Mag ook via env vars:
-# POKEMONTCG_API_KEY en PPT_API_KEY
+# API keys. Mag ook via env vars / GitHub secrets: PPT_API_KEY
+ppt_api_key: ""          # pokemonpricetracker.com = hoofdbron (raw + PSA). Gratis key.
+# pokemontcg.io stopt (geen nieuwe keys). Werkt nog zonder key voor
+# Cardmarket-prijzen; valt daarna vanzelf terug op pokemonpricetracker.
 pokemontcg_api_key: ""
-ppt_api_key: ""          # pokemonpricetracker.com (voor PSA/eBay prijzen)
 usd_to_eur: 0.92         # omrekening voor eBay-prijzen in dollars
 
 # Wanneer is iets een deal?
@@ -61,7 +67,8 @@ skip_existing_on_first_run: true
 # ===== Watchlist: kaarten waar de bot op let =====
 # keywords: advertentie matcht als ÉÉN van deze zinnen in titel/omschrijving staat
 # exclude:  woorden die een match afkeuren
-# pokemontcg_id: id van pokemontcg.io (zoek op https://pokemontcg.io), geeft Cardmarket prijs
+# pokemontcg_id: (optioneel) id voor Cardmarket-prijs zolang pokemontcg.io werkt
+# ppt_search: zoekterm voor pokemonpricetracker (naam + nummer)
 # Handmatige waardes (EUR) overschrijven de API als je ze invult.
 # Japanse kaart? Zet language: "japanese" (prijzen via pokemonpricetracker, ppt_api_key nodig)
 watchlist:

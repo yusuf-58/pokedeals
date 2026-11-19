@@ -212,21 +212,22 @@ def ppt_card(search: str, cfg: dict, store: Store, language: str) -> dict | None
     return out or None
 
 
-def jp_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
-    """Japanse kaart herkennen via titel (+ nummer) op pokemonpricetracker."""
+def jp_identify(listing: Listing, cfg: dict, store: Store, language: str = "japanese") -> dict | None:
+    """Kaart herkennen via titel (+ nummer) op pokemonpricetracker."""
     words = [w for w in re.findall(r"[a-zA-Zé]+|\d{1,3}/\d{1,3}", listing.title)
              if w.lower() not in STOP and not GRADE_RE.fullmatch(w)]
     words = [w for w in words if w.upper() not in ("PSA", "CGC", "BGS")]
     if len(words) < 2:
         return None
     search = " ".join(words[:5])
-    c = ppt_card(search, cfg, store, "japanese")
+    c = ppt_card(search, cfg, store, language)
     if not c or not c.get("name"):
         return None
     if c["name"].split()[0].lower() not in listing.text:
         return None  # resultaat lijkt niet op de advertentie
-    return {"name": f"🇯🇵 {c['name']} ({c['set']})", "ppt_search": search,
-            "language": "japanese", "auto": True}
+    flag = "🇯🇵 " if language == "japanese" else ""
+    return {"name": f"{flag}{c['name']} ({c['set']})", "ppt_search": search,
+            "language": language, "auto": True}
 
 
 NUM_RE = re.compile(r"\b([a-z]{0,3}\d{1,3})\s*/\s*([a-z]{0,3}\d{1,3})\b", re.I)
@@ -258,12 +259,14 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
             cached = [{"id": c["id"], "name": c["name"], "set": c["set"]["name"]}
                       for c in r.json().get("data", [])]
         except Exception as e:
-            log.warning("auto-identify fout: %s", e)
-            return None
+            log.info("pokemontcg.io niet bereikbaar (%s), gebruik pokemonpricetracker", e)
+            return jp_identify(listing, cfg, store, "english")
         store.cache_put(key, cached)
     # kies de kaart waarvan de Pokemon-naam in de titel staat
     t = listing.text
     hits = [c for c in cached if c["name"].split()[0].lower() in t]
+    if not cached:
+        return jp_identify(listing, cfg, store, "english")
     if len(hits) != 1:
         return None  # onzeker = niet melden
     c = hits[0]
@@ -396,10 +399,9 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
             info = {"name": card["name"], "ppt_search": search, "language": "japanese", "auto": True}
         elif lang in (None, "en"):
             cid = lookup_card(card["name"], card.get("number"), cfg, store)
-            if not cid:
-                unknown += 1
-                continue
-            info = {"name": card["name"], "pokemontcg_id": cid, "ppt_search": search, "auto": True}
+            info = {"name": card["name"], "ppt_search": search, "auto": True}
+            if cid:
+                info["pokemontcg_id"] = cid
         else:
             unknown += 1
             continue
@@ -486,59 +488,34 @@ def _find_grade(obj, grade: str):
     return None
 
 
-def price_ppt_graded(search: str, api_key: str) -> tuple[float | None, float | None]:
-    """PSA 9 / PSA 10 (USD) uit eBay-verkopen via pokemonpricetracker.com."""
-    r = requests.get("https://www.pokemonpricetracker.com/api/v2/cards",
-                     params={"search": search, "limit": 1, "includeEbay": "true"},
-                     headers={"Authorization": f"Bearer {api_key}"}, timeout=25)
-    r.raise_for_status()
-    data = r.json().get("data")
-    card = data[0] if isinstance(data, list) and data else data
-    if not card:
-        return None, None
-    ebay = card.get("ebay") or card
-    return _find_grade(ebay, "9"), _find_grade(ebay, "10")
-
-
 def get_values(card: dict, cfg: dict, store: Store, want_graded: bool = False) -> Values:
-    if card.get("language") == "japanese":
-        v = Values()
-        c = ppt_card(card.get("ppt_search") or card["name"], cfg, store, "japanese") or {}
-        v.raw, v.psa9, v.psa10 = c.get("raw"), c.get("psa9"), c.get("psa10")
-        if c:
-            v.sources.append("PPT (JP)")
-        for attr, ck in (("raw", "raw_value_eur"), ("psa9", "psa9_value_eur"), ("psa10", "psa10_value_eur")):
-            if _num(card.get(ck)):
-                setattr(v, attr, float(card[ck]))
-        return v
-    key = "val:" + card.get("pokemontcg_id", card["name"])
+    """Raw: Cardmarket (pokemontcg.io, zolang die werkt) anders pokemonpricetracker.
+    Graded: eBay-verkopen via pokemonpricetracker. Handmatige waardes winnen."""
+    lang = card.get("language") or "english"
+    v = Values()
+    key = "val:" + (card.get("pokemontcg_id") or card["name"])
     cached = store.cache_get(key)
     if cached:
         v = Values(**cached)
     else:
-        v = Values()
-        tcg_key = os.getenv("POKEMONTCG_API_KEY") or cfg.get("pokemontcg_api_key") or ""
-        ppt_key = os.getenv("PPT_API_KEY") or cfg.get("ppt_api_key") or ""
-        if card.get("pokemontcg_id"):
+        if lang == "english" and card.get("pokemontcg_id"):
+            tcg_key = os.getenv("POKEMONTCG_API_KEY") or cfg.get("pokemontcg_api_key") or ""
             try:
                 v.raw = price_pokemontcg(card["pokemontcg_id"], tcg_key)
                 if v.raw:
                     v.sources.append("Cardmarket")
             except Exception as e:
-                log.warning("pokemontcg fout voor %s: %s", key, e)
-        # PSA-prijs alleen ophalen bij slabs of watchlist-kaarten (spaart credits)
-        if ppt_key and card.get("ppt_search") and (want_graded or not card.get("auto")):
-            try:
-                p9, p10 = price_ppt_graded(card["ppt_search"], ppt_key)
-                fx = float(cfg.get("usd_to_eur", 0.92))
-                v.psa9 = round(p9 * fx, 2) if p9 else None
-                v.psa10 = round(p10 * fx, 2) if p10 else None
-                if p9 or p10:
-                    v.sources.append("eBay sold")
-            except Exception as e:
-                log.warning("PPT fout voor %s: %s", key, e)
+                log.info("pokemontcg.io niet bruikbaar (%s)", e)
+        need_ppt = (not v.raw) or want_graded or not card.get("auto")
+        if need_ppt:
+            c = ppt_card(card.get("ppt_search") or card["name"], cfg, store, lang) or {}
+            if not v.raw and c.get("raw"):
+                v.raw = c["raw"]
+                v.sources.append("TCGplayer (PPT)")
+            v.psa9, v.psa10 = c.get("psa9"), c.get("psa10")
+            if v.psa9 or v.psa10:
+                v.sources.append("eBay sold")
         store.cache_put(key, v.__dict__)
-    # handmatige waardes winnen altijd
     for attr, ck in (("raw", "raw_value_eur"), ("psa9", "psa9_value_eur"), ("psa10", "psa10_value_eur")):
         if _num(card.get(ck)):
             setattr(v, attr, float(card[ck]))
@@ -603,7 +580,7 @@ def format_deal(d: Deal) -> tuple[str, str]:
 def notify(cfg: dict, title: str, message: str, click: str | None = None,
            image: str | None = None, priority: int = 4):
     n = cfg["ntfy"]
-    payload = {"topic": n["topic"], "title": title, "message": message,
+    payload = {"topic": os.getenv("NTFY_TOPIC") or n["topic"], "title": title, "message": message,
                "priority": priority, "tags": ["moneybag"]}
     if click:
         payload["click"] = click
@@ -620,7 +597,7 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
     deals: list[Deal] = []
     for q in cfg["searches"]:
         try:
-            listings = fetch_marktplaats(q)
+            listings = fetch_marktplaats(q, int(cfg.get("mp_limit", 30)))
         except Exception as e:
             log.warning("Marktplaats fout (%s): %s", q, e)
             continue

@@ -1,0 +1,47 @@
+name: PokeDeals
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # elke 5 min (GitHub kan wat later starten)
+  workflow_dispatch:         # handmatig starten via de Actions-tab
+
+concurrency:
+  group: pokedeals
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # onthoud welke advertenties al gezien zijn
+      - name: Database ophalen
+        uses: actions/cache/restore@v4
+        with:
+          path: pokedeals.db
+          key: pokedeals-db-${{ github.run_id }}
+          restore-keys: pokedeals-db-
+
+      - name: Scannen
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
+          PPT_API_KEY: ${{ secrets.PPT_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python pokedeals.py --once
+
+      - name: Database opslaan
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: pokedeals.db
+          key: pokedeals-db-${{ github.run_id }}

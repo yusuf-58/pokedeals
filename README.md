@@ -9,8 +9,8 @@ Checkt Marktplaats elke minuut op Pokémon-kaarten uit je watchlist, vergelijkt 
 4. Zet dezelfde naam in `config.yaml` bij `ntfy.topic`.
 
 ## 2. API keys (gratis)
-- **pokemontcg.io** → dev.pokemontcg.io (Cardmarket prijzen, raw)
-- **pokemonpricetracker.com** → API key (PSA 9/10 prijzen uit eBay). Gratis = 100 credits/dag; de bot cachet prijzen 12 uur dus dat is genoeg voor ~40 kaarten.
+- **pokemonpricetracker.com** → gratis API key = hoofdbron (raw + PSA 9/10, Engels + Japans). Gratis = 100 credits/dag; prijzen worden 12 uur onthouden.
+- pokemontcg.io is gestopt met nieuwe keys; de bot gebruikt hem zonder key zolang hij werkt (extra Cardmarket-prijzen), anders automatisch pokemonpricetracker.
 
 Zet ze in `config.yaml` of als env vars `POKEMONTCG_API_KEY` / `PPT_API_KEY`.
 
@@ -24,7 +24,21 @@ python pokedeals.py --test-notify   # krijg je een melding? 👍
 python pokedeals.py --once          # 1 ronde
 ```
 
-## 4. 24/7 laten draaien (ook als jij offline bent)
+## 4A. Gratis online via GitHub (aanrader, geen kaart nodig)
+Draait elke ~5 min in de cloud, ook als je pc uit is.
+1. Maak een account op github.com → **New repository** → kies **Public** (dan is het onbeperkt gratis).
+2. Upload alle bestanden uit deze map (ook de map `.github`).
+3. Repo → **Settings → Secrets and variables → Actions → New secret**. Voeg toe:
+   - `NTFY_TOPIC` (verplicht)
+   - `PPT_API_KEY`, `POKEMONTCG_API_KEY`, `GEMINI_API_KEY` (optioneel)
+4. Tab **Actions** → PokeDeals → **Run workflow** om te testen.
+
+Tips:
+- Je secrets zijn geheim, ook in een public repo. Zet daarom je keys NIET in `config.yaml`.
+- GitHub zet geplande workflows uit na 60 dagen zonder activiteit in de repo. Pas dus af en toe iets aan (bv. je watchlist).
+- Eerste run meldt niks (slaat bestaande advertenties over), daarna alleen nieuwe.
+
+## 4B. Eigen server (elke minuut)
 Je hebt een machine nodig die altijd aan staat:
 - **Gratis:** Oracle Cloud "Always Free" VM
 - **Goedkoop:** kleine VPS (Hetzner, Contabo, …)
