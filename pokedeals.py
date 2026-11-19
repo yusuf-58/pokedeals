@@ -29,7 +29,12 @@ MP_SEARCH = "https://www.marktplaats.nl/lrp/api/search"
 PRICE_CACHE_HOURS = 12
 
 GRADE_RE = re.compile(
-    r"\b(psa|cgc|bgs|beckett|sgc|tag)\s*[-:#]?\s*(10|9\.5|9|8\.5|8|7)\b", re.I)
+    r"\b(psa|cgc|bgs|beckett|sgc|tag|ace)\s*[-:#]?\s*(10|[1-9](?:\.5)?)\b", re.I)
+# slab zonder (leesbaar) cijfer, of slechte staat -> nooit als NM raw waarderen
+SLAB_RE = re.compile(r"\b(psa|cgc|bgs|beckett|sgc|graded|slab|gegrade?)\b", re.I)
+BAD_COND_RE = re.compile(
+    r"\b(played|lp|mp|hp|dmg|damaged|beschadigd|kras(sen)?|vouw|geknakt|creased?|"
+    r"heavily|poor|vg|vg-ex|good condition|gebruikt|bespeeld)\b", re.I)
 
 
 # ---------------------------------------------------------------- data
@@ -70,6 +75,7 @@ class Deal:
     margin_pct: float
     grading_note: str | None = None
     market: float | None = None    # marktwaarde (bruto)
+    source: str = ""
 
 
 # ---------------------------------------------------------------- storage
@@ -561,6 +567,10 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
         return Deal(listing, card, "sealed", None, round(buy, 2), round(sell, 2),
                     round(profit, 2), round(margin, 1), "📦 Sealed: check of de seal echt intact is!", round(v.raw, 2))
     grade = detect_grade(listing.text)
+    if not grade and SLAB_RE.search(listing.text):
+        return None  # graded maar cijfer onbekend: niet gokken
+    if not grade and BAD_COND_RE.search(listing.text):
+        return None  # geen near mint: raw-prijs klopt dan niet
 
     if grade:
         target = {"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade)
@@ -585,8 +595,11 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
     margin = profit / buy * 100 if buy else 0
     if profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]:
         return None
+    if margin >= 80:
+        note = ((note + "\n") if note else "") + "⚠️ Te mooi om waar te zijn? Check prijs + staat zelf!"
     return Deal(listing, card, kind, grade, round(buy, 2), round(sell, 2),
-                round(profit, 2), round(margin, 1), note, round(market, 2))
+                round(profit, 2), round(margin, 1), note, round(market, 2),
+                ", ".join(v.sources))
 
 
 # ---------------------------------------------------------------- melding
@@ -643,6 +656,8 @@ def deal_embed(d: Deal, cfg: dict) -> dict:
         {"name": "💰 Winst bij bod", "value": f"€{profit_offer:.2f}", "inline": True},
         {"name": "🏷️ Type", "value": label, "inline": True},
     ]
+    if d.source:
+        fields.append({"name": "🔎 Prijsbron", "value": d.source[:200], "inline": True})
     if d.grading_note:
         fields.append({"name": "ℹ️ Info", "value": d.grading_note[:1000], "inline": False})
     fields.append({"name": "✉️ Bericht voor verkoper", "value": f"```{seller_message(d, offer, cfg)}```", "inline": False})

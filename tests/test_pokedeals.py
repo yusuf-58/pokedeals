@@ -225,3 +225,18 @@ def test_title_lookup_and_budget(tmp_path):
         for i in range(5):
             pd.ppt_card(f"kaart {i}", cfg, store, "english")
     assert g.call_count == 2
+
+
+def test_low_grade_and_condition_not_valued_as_raw():
+    card = REAL_CFG["watchlist"][0]
+    v = pd.Values(raw=8464, psa9=9000, psa10=20000, sources=["TCGplayer (PPT)"])
+    for title in ["2006 Pokemon EX Gold Star Mewtwo-Holo PSA 4",
+                  "Mewtwo gold star CGC 6", "Mewtwo star graded slab",
+                  "Mewtwo star lightly played", "Mewtwo star beschadigd"]:
+        l = pd.parse_mp_listing(mp("x", "Moonbreon " + title, 400000))
+        assert pd.evaluate(l, card, v, REAL_CFG) is None, title
+    assert pd.detect_grade("PSA 4") == "PSA 4"
+    # PSA 10 werkt nog + krijgt waarschuwing bij extreme marge
+    l = pd.parse_mp_listing(mp("y", "Moonbreon PSA 10", 400000))
+    d = pd.evaluate(l, card, v, REAL_CFG)
+    assert d and d.grade == "PSA 10" and "Te mooi" in d.grading_note and d.source
