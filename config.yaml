@@ -91,10 +91,11 @@ vision:
   min_confidence: 0.75        # AI moet zo zeker zijn
 
 # Rustig houden: deals worden verzameld en elke `batch_minutes` krijg je de beste `batch_size`.
-batch_minutes: 30
+batch_minutes: 15
 batch_size: 3
 queue_max_age_hours: 3       # oudere deals uit de wachtrij vallen weg
 instant_topdeals: true       # TOPDEAL (€300+) meteen sturen
+check_bids: true             # bij bieden-advertenties eerst het hoogste bod checken
 # Deals waarbij de exacte versie onzeker is (geen kaartnummer) ook melden?
 allow_uncertain: false
 

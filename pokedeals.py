@@ -225,6 +225,32 @@ def fetch_marktplaats(query: str, limit: int = 100, pages: int = 2, start: int =
     return out
 
 
+BID_BLOCK_RE = re.compile(r'"bids"\s*:\s*\[(.*?)\]', re.S)
+BID_VAL_RE = re.compile(r'"(?:value|amount|priceCents|bidAmount)"\s*:\s*"?(\d+(?:\.\d+)?)')
+
+
+def fetch_highest_bid(l: Listing, store: Store | None = None) -> float | None:
+    """Hoogste huidige bod (EUR) van de advertentiepagina. None = geen/onbekend."""
+    if not l.url:
+        return None
+    try:
+        r = requests.get(l.url, timeout=20, headers={"User-Agent": UA, "Accept": "text/html"})
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:
+        log.info("Biedingen ophalen mislukt (%s): %s", l.id, e)
+        return None
+    vals = []
+    for block in BID_BLOCK_RE.findall(html):
+        for v in BID_VAL_RE.findall(block):
+            x = float(v)
+            vals.append(x / 100 if x >= 1000 and "." not in v else x)  # centen -> euro
+    if os.getenv("POKEDEALS_DEBUG"):
+        i = html.find('"bids"')
+        log.info("DEBUG biedingen %s: %s | %s", l.id, vals[:5], html[i:i+200] if i >= 0 else "geen 'bids' in pagina")
+    return max(vals) if vals else None
+
+
 # ---------------------------------------------------------------- matching
 def detect_grade(text: str) -> str | None:
     m = GRADE_RE.search(text)
@@ -294,9 +320,10 @@ def ppt_card(search: str, cfg: dict, store: Store, language: str) -> dict | None
     prices = card.get("prices") or {}
     raw = _num(prices.get("market")) or _num(prices.get("mid"))
     ebay = card.get("ebay") or card
-    p9, p10 = _find_grade(ebay, "9"), _find_grade(ebay, "10")
+    p8, p9, p10 = _find_grade(ebay, "8"), _find_grade(ebay, "9"), _find_grade(ebay, "10")
     out = {"name": card.get("name") or "", "set": card.get("setName") or card.get("set") or "",
            "raw": round(raw * fx, 2) if raw else None,
+           "psa8": round(p8 * fx, 2) if p8 else None,
            "psa9": round(p9 * fx, 2) if p9 else None,
            "psa10": round(p10 * fx, 2) if p10 else None} if card else {}
     store.cache_put(key, out)
@@ -841,6 +868,8 @@ def get_values(card: dict, cfg: dict, store: Store, want_graded: bool = False) -
                 v.raw = c["raw"]
                 v.sources.append("TCGplayer (PPT)")
             v.psa9, v.psa10 = c.get("psa9"), c.get("psa10")
+            if c.get("psa8"):
+                v.grades = {**v.grades, "PSA 8": c["psa8"]}
             if v.psa9 or v.psa10:
                 v.sources.append("eBay sold")
         store.cache_put(key, v.__dict__)
@@ -1072,7 +1101,7 @@ def notify(cfg: dict, title: str, message: str, click: str | None = None,
 NO_PRICE_TYPES = ("SEE_DESCRIPTION", "NOTK", "BID", "MIN_BID", "FAST_BID", "")
 
 
-def bid_chance(l: Listing, card: dict, v: Values, cfg: dict) -> dict | None:
+def bid_chance(l: Listing, card: dict, v: Values, cfg: dict, highest: float | None = None) -> dict | None:
     """Advertentie zonder (bruikbare) prijs maar herkende, waardevolle kaart."""
     if l.price_eur and l.price_eur > 1:
         return None
@@ -1097,12 +1126,16 @@ def bid_chance(l: Listing, card: dict, v: Values, cfg: dict) -> dict | None:
     max_bid = sell - cfg["min_profit_eur"] - cfg["costs"]["buy_shipping_eur"]
     if max_bid < 20:
         return None
+    if highest is not None and highest >= max_bid:
+        return None  # er wordt al meer geboden dan winstgevend is
     return {"market": round(market, 2), "sell": round(sell, 2), "max_bid": int(max_bid),
-            "grade": grade or "Raw", "source": ", ".join(v.sources)}
+            "grade": grade or "Raw", "source": ", ".join(v.sources), "highest": highest}
 
 
 def send_bid_chance(cfg: dict, l: Listing, card: dict, b: dict):
     open_bid = _round_down(b["max_bid"] * 0.75)
+    if b.get("highest"):
+        open_bid = max(open_bid, int(b["highest"]) + 5)
     naam = (cfg.get("negotiation") or {}).get("your_name", "Yusuf")
     msg = (f"Hoi! Ik heb interesse in je {l.title[:60]}. Is hij nog beschikbaar? "
            f"Ik zou €{open_bid} willen bieden, ik kan snel betalen en hem ophalen of laten verzenden. "
@@ -1112,6 +1145,7 @@ def send_bid_chance(cfg: dict, l: Listing, card: dict, b: dict):
         {"name": "📈 Marktwaarde", "value": f"€{b['market']:.0f} ({b['grade']})", "inline": True},
         {"name": "🎯 Max bod (voor €%d winst)" % cfg["min_profit_eur"], "value": f"€{b['max_bid']}", "inline": True},
         {"name": "🤝 Openingsbod", "value": f"€{open_bid}", "inline": True},
+        {"name": "📊 Hoogste bod nu", "value": f"€{b['highest']:.0f}" if b.get("highest") else "nog geen", "inline": True},
         {"name": "🔎 Prijsbron", "value": b["source"][:200] or "-", "inline": True},
         {"name": "✉️ Bericht voor verkoper", "value": f"```{msg}```", "inline": False},
     ]
@@ -1185,6 +1219,14 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         counts["id"] += 1
         v = get_values(card, cfg, store, bool(detect_grade(l.text)))
         d = evaluate(l, card, v, cfg)
+        if d and l.price_type != "FIXED" and cfg.get("check_bids", True):
+            hb = fetch_highest_bid(l, store)
+            if hb and hb > (l.price_eur or 0):
+                from dataclasses import replace
+                d = evaluate(replace(l, price_eur=hb + 5), card, v, cfg)   # wat je minstens moet bieden
+                if d:
+                    d.grading_note = ((d.grading_note + "\n") if d.grading_note else "") + \
+                        f"📊 Hoogste bod nu €{hb:.0f} (vraagprijs €{l.price_eur:.0f}); winst gerekend vanaf €{hb + 5:.0f}"
         near = None if d else evaluate(l, card, v, loose)
         if d or near:
             counts["val"] += 1
@@ -1192,6 +1234,8 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             store.best(day, near.profit, f"{near.card['name']} voor €{l.price_eur:.0f} ({l.url})")
         if not d and cfg.get("bid_alerts", True):
             b = bid_chance(l, card, v, cfg)
+            if b and cfg.get("check_bids", True):
+                b = bid_chance(l, card, v, cfg, fetch_highest_bid(l, store))
             ck = f"bidcard:{day}:{card['name']}"
             if b and not store.kv_get(f"bidsent:{l.id}") and not store.kv_get(ck):
                 store.kv_set(f"bidsent:{l.id}", 1)

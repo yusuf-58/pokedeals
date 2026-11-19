@@ -413,3 +413,34 @@ def test_batch_mode(tmp_path):
         store.kv_set("last_flush", 0)                 # 30 min later
         pd.flush_queue(cfg, store)
     assert sent[3:] == ["m2", "m3"]
+
+
+def test_highest_bid_blocks_bid_chance():
+    html = 'x "bids":[{"id":1,"value":350000,"date":"2026"},{"id":2,"value":300000}] y'
+    r = mock.Mock(); r.raise_for_status = lambda: None; r.text = html
+    l = pd.parse_mp_listing(mp("hb", "3 Charizard & Snorlax LV.X", 0, "FAST_BID"))
+    with mock.patch.object(pd.requests, "get", return_value=r):
+        hb = pd.fetch_highest_bid(l)
+    assert hb == 3500.0
+    card = {"name": "Charizard star"}
+    v = pd.Values(raw=838)
+    assert pd.bid_chance(l, card, v, REAL_CFG) is not None
+    assert pd.bid_chance(l, card, v, REAL_CFG, hb) is None       # 3500 > max bod
+    b = pd.bid_chance(l, card, v, REAL_CFG, 200.0)
+    assert b and b["highest"] == 200.0
+
+
+def test_bid_deal_uses_highest_bid():
+    store = None
+    card = REAL_CFG["watchlist"][0]
+    v = pd.Values(raw=1000)
+    l = pd.parse_mp_listing(mp("x", "Moonbreon", 30000, "FAST_BID"))  # vraagt 300, bod al 900
+    counts = {"new": 0, "id": 0, "val": 0}
+    with mock.patch.object(pd, "fetch_highest_bid", return_value=900.0), \
+         mock.patch.object(pd, "get_values", return_value=v), \
+         mock.patch.object(pd, "match_card", return_value=card), \
+         mock.patch.object(pd, "send_deal"):
+        st = pd.Store(":memory:")
+        deals = []
+        pd.process_listing(l, {**REAL_CFG, "batch_minutes": 0}, st, "d", counts, deals)
+    assert deals == []                                                # niet meer winstgevend
