@@ -110,7 +110,7 @@ class Store:
 
     def take_best(self, n: int, max_age_h: float, slab_share: float = 0.0) -> list:
         self.db.execute("DELETE FROM queue WHERE ts < ?", (time.time() - max_age_h * 3600,))
-        n_slab = round(n * slab_share)
+        n_slab = n if slab_share >= 0.85 else round(n * slab_share)   # 90%: alles slabs als die er zijn
         rows = self.db.execute("SELECT id, kind, data FROM queue WHERE kind='slab' ORDER BY score DESC LIMIT ?",
                                (n_slab,)).fetchall()
         rows += self.db.execute("SELECT id, kind, data FROM queue WHERE id NOT IN (%s) ORDER BY score DESC LIMIT ?"
@@ -1380,7 +1380,7 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         deals.append(d)
         store.inc(day, "deals")
         log.info("DEAL%s: %s", " (oud)" if old else "", format_deal(d)[0])
-        if is_topdeal(d) and cfg.get("instant_topdeals", True):
+        if is_topdeal(d) and d.kind == "graded" and cfg.get("instant_topdeals", True):
             try:
                 send_deal(cfg, d)
             except Exception as e:

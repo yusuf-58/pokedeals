@@ -107,10 +107,10 @@ vision:
 # Rustig houden: deals worden verzameld en elke `batch_minutes` krijg je de beste `batch_size`.
 batch_minutes: 15
 batch_size: 3
-slab_share: 0.7              # ~70% van de berichten zijn slabs (als die er zijn)
+slab_share: 0.9              # 90% slabs; raw alleen als er geen slabs genoeg zijn
 slab_title_matching: true    # slabs ook zonder kaartnummer herkennen (via pokemonpricetracker)
 queue_max_age_hours: 3       # oudere deals uit de wachtrij vallen weg
-instant_topdeals: true       # TOPDEAL (€300+) meteen sturen
+instant_topdeals: true       # TOPDEAL-slab (€300+) meteen sturen (raw gaat altijd via de wachtrij)
 check_bids: true             # bij bieden-advertenties eerst het hoogste bod checken
 # Deals waarbij de exacte versie onzeker is (geen kaartnummer) ook melden?
 allow_uncertain: false
