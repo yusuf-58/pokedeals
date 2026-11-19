@@ -170,7 +170,13 @@ def fetch_marktplaats(query: str, limit: int = 30) -> list[Listing]:
     r = requests.get(MP_SEARCH, params=params, timeout=20,
                      headers={"User-Agent": UA, "Accept": "application/json"})
     r.raise_for_status()
-    return [parse_mp_listing(x) for x in r.json().get("listings", [])]
+    raw = r.json().get("listings", [])
+    if os.getenv("POKEDEALS_DEBUG"):
+        for x in raw[:4]:
+            log.info("DEBUG %s | %s | %s | prio=%s | %s", query, x.get("itemId"), x.get("date"),
+                     x.get("priorityProduct"), (x.get("title") or "")[:40])
+        log.info("DEBUG %s: %d resultaten, keys=%s", query, len(raw), sorted((raw[0] if raw else {}).keys())[:30])
+    return [parse_mp_listing(x) for x in raw]
 
 
 # ---------------------------------------------------------------- matching
@@ -959,6 +965,8 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
         except Exception as e:
             log.warning("Marktplaats fout (%s): %s", q, e)
             continue
+        log.info("%s: %d advertenties, %d al gezien", q, len(listings),
+                 sum(1 for x in listings if x.id and store.seen(x.id)))
         for l in listings:
             if not l.id or store.seen(l.id):
                 continue

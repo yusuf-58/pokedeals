@@ -46,6 +46,7 @@ jobs:
           PPT_API_KEY: ${{ secrets.PPT_API_KEY }}
           PRICECHARTING_TOKEN: ${{ secrets.PRICECHARTING_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          POKEDEALS_DEBUG: "1"
         run: |
           if [ "${{ inputs.test }}" = "true" ]; then
             python pokedeals.py --test-notify
