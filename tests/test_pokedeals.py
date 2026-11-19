@@ -238,7 +238,7 @@ def test_title_lookup_and_budget(tmp_path):
     l = pd.parse_mp_listing(mp("t", "Charizard VMAX rainbow rare NM", 20000))
     ppt = {"name": "Charizard VMAX", "set": "Darkness Ablaze", "raw": 300.0}
     with mock.patch.object(pd, "ppt_card", return_value=ppt):
-        c = pd.auto_identify(l, CFG, store)
+        c = pd.auto_identify(l, {**CFG, "title_only_matching": True, "use_tcgdex": False}, store)
     assert c and "Charizard VMAX" in c["name"]
     # budget: na 2 calls stopt hij
     cfg = {**CFG, "ppt_api_key": "x", "ppt_daily_budget": 2}
@@ -266,7 +266,7 @@ def test_low_grade_and_condition_not_valued_as_raw():
 
 def test_pricecharting(tmp_path):
     store = pd.Store(tmp_path / "pc.db")
-    cfg = {**REAL_CFG, "pricecharting_token": "tok"}
+    cfg = {**REAL_CFG, "pricecharting_token": "tok", "title_only_matching": True, "use_tcgdex": False, "max_margin_pct": 10000}
     pc = {"status": "success", "id": "123", "product-name": "Mewtwo Star #103",
           "console-name": "Pokemon Holon Phantoms",
           "loose-price": 400000, "condition-14-price": 300000, "graded-price": 600000,
@@ -373,7 +373,8 @@ def test_tcgdex_number_and_name(tmp_path):
         v = pd.get_values(c, CFG, store)
         assert v.raw == 1100.0 and "TCGdex" in v.sources[0]
         l2 = pd.parse_mp_listing(mp("2", "Charizard VMAX shiny", 5000))
-        c2 = pd.auto_identify(l2, CFG, store)
+        assert pd.auto_identify(l2, CFG, store) is None          # standaard: niet raden
+        c2 = pd.auto_identify(l2, {**CFG, "title_only_matching": True}, store)
         assert c2 and set(c2["tcgdex_ids"]) == {"a", "b"} and c2["uncertain"]
         v2 = pd.get_values(c2, CFG, store)
         assert v2.raw == 92.0          # laagste versie (100 USD)
@@ -444,3 +445,14 @@ def test_bid_deal_uses_highest_bid():
         deals = []
         pd.process_listing(l, {**REAL_CFG, "batch_minutes": 0}, st, "d", counts, deals)
     assert deals == []                                                # niet meer winstgevend
+
+
+def test_reported_false_matches():
+    assert not pd._name_in_text("Groudon ☆", "groudon xy black star promos (xypr 52) - excellent")
+    assert pd._name_in_text("Groudon ☆", "groudon gold star ex team magma")
+    l = pd.parse_mp_listing(mp("g", "Gengar Lv.44 Arceus (AR 16) - Excellent", 4200))
+    assert pd.auto_identify(l, CFG, pd.Store(":memory:")) is None
+    # vangnet: 4500% marge bij automatische kaart -> niet melden
+    card = {"name": "x", "auto": True}
+    l2 = pd.parse_mp_listing(mp("h", "Groudon", 5200))
+    assert pd.evaluate(l2, card, pd.Values(raw=2760), REAL_CFG) is None

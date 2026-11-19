@@ -72,7 +72,11 @@ costs:
 # Automatische modus: herkent ook kaarten buiten je watchlist
 # via het kaartnummer in de titel (bv. "Pikachu 160/159").
 auto_mode: true
-use_tcgdex: true             # gratis Cardmarket-prijzen via TCGdex (hoofdbron Engelse kaarten)
+use_tcgdex: true
+# Kaart zonder nummer op naam raden? Onbetrouwbaar (gaf foute meldingen), dus uit.
+title_only_matching: false
+# Meer dan zoveel % winst bij een automatisch herkende kaart = bijna altijd verkeerde kaart
+max_margin_pct: 300             # gratis Cardmarket-prijzen via TCGdex (hoofdbron Engelse kaarten)
 # Ook advertenties ZONDER kaartnummer herkennen op titel (kost API-credits)
 title_lookup_min_price: 15   # goedkopere advertenties niet opzoeken
 ppt_daily_budget: 30         # max opzoekingen per dag (gratis tegoed = 100 credits, ~3 per opzoeking)

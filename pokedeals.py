@@ -460,7 +460,7 @@ def tcgdex_price(card: dict, fx: float) -> float | None:
     return round(min(mk) * fx, 2) if mk else None
 
 
-SYMBOLS = {"◇": ("prism", "◇"), "☆": ("star", "☆", "★"), "★": ("star", "☆", "★"),
+SYMBOLS = {"◇": ("prism", "◇"), "☆": ("gold star", "goldstar", "☆", "★"), "★": ("gold star", "goldstar", "☆", "★"),
            "δ": ("delta", "δ"), "♀": ("♀", "female", "nidoran"), "♂": ("♂", "male", "nidoran")}
 
 
@@ -524,7 +524,9 @@ def tcgdex_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
         d = good[0]
         return {"name": f"{d['name']} {num}/{total} ({(d.get('set') or {}).get('name', '')})",
                 "tcgdex_ids": [d["id"]], "ppt_search": f"{d['name']} {num}", "auto": True}
-    # zonder nummer: naam zoeken, alle versies die passen -> laagste prijs (voorzichtig)
+    # zonder nummer: naam raden is onbetrouwbaar (Black Star Promo != Gold Star, Lv.44 != LV.X)
+    if not cfg.get("title_only_matching", False):
+        return None
     words = [w for w in re.findall(r"[a-zA-Zé]+", listing.title) if w.lower() not in STOP and len(w) > 2]
     for w in words[:2]:
         res = tcgdex_get("/cards", {"name": w}, store)
@@ -564,7 +566,8 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
     if not m:
         # geen kaartnummer: probeer de titel zelf (bv. "Charizard VMAX rainbow")
         no_price = not listing.price_eur and listing.price_type in ("SEE_DESCRIPTION", "NOTK", "FAST_BID", "MIN_BID", "BID")
-        if no_price or (listing.price_eur and listing.price_eur >= float(cfg.get("title_lookup_min_price", 15))):
+        if cfg.get("title_only_matching", False) and (
+                no_price or (listing.price_eur and listing.price_eur >= float(cfg.get("title_lookup_min_price", 15)))):
             return jp_identify(listing, cfg, store, "english")
         return None
     num, total = m.group(1).upper(), m.group(2)
@@ -934,6 +937,9 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
     profit = sell - buy
     margin = profit / buy * 100 if buy else 0
     if profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]:
+        return None
+    if card.get("auto") and margin > float(cfg.get("max_margin_pct", 300)):
+        log.info("Overgeslagen (marge %.0f%% = waarschijnlijk verkeerde kaart): %s", margin, listing.title[:60])
         return None
     if margin >= 80:
         note = ((note + "\n") if note else "") + "⚠️ Te mooi om waar te zijn? Check prijs + staat zelf!"
