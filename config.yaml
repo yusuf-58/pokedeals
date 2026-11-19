@@ -90,9 +90,14 @@ vision:
   min_listing_price: 10       # goedkopere advertenties niet scannen
   min_confidence: 0.75        # AI moet zo zeker zijn
 
+# Rustig houden: max zoveel losse berichten per run (rest in 1 lijstje)
+max_messages_per_run: 3
+# Deals waarbij de exacte versie onzeker is (geen kaartnummer) ook melden?
+allow_uncertain: false
+
 # Advertenties zonder vraagprijs ("Bieden", "n.o.t.k.") met waardevolle kaart melden
 bid_alerts: true
-bid_alert_min_value: 300     # alleen kaarten van minstens zoveel waard
+bid_alert_min_value: 500     # alleen kaarten van minstens zoveel waard (zelfde kaart max 1x per dag)
 
 # Dagoverzicht in Discord (uur, Nederlandse tijd). -1 = uit
 daily_summary_hour: 21

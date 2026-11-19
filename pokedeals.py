@@ -975,7 +975,7 @@ def deal_buttons(url: str) -> list:
 
 def send_deal_bot(token: str, channel: str, d: Deal, cfg: dict):
     top = d.profit >= 300
-    head = f"@here 🔥 **TOPDEAL: +€{d.profit:.0f}**" if top else f"@here 💰 **Deal: +€{d.profit:.0f}** ({d.margin_pct:.0f}%)"
+    head = f"@here 🔥 **TOPDEAL: +€{d.profit:.0f}**" if top else f"💰 **Deal: +€{d.profit:.0f}** ({d.margin_pct:.0f}%)"
     r = requests.post(f"https://discord.com/api/v10/channels/{channel}/messages",
                       headers={"Authorization": f"Bot {token}"}, timeout=15,
                       json={"content": head,
@@ -1142,6 +1142,13 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
     if not card and cfg.get("auto_mode", True):
         card = auto_identify(l, cfg, store)
     d = None
+    if card and card.get("uncertain") and not cfg.get("allow_uncertain", False):
+        # versie onzeker: alleen verder via foto-herkenning (als die aan staat), anders niet melden
+        has_vision = (cfg.get("vision") or {}).get("enabled") and (
+            os.getenv("GEMINI_API_KEY") or (cfg.get("vision") or {}).get("gemini_api_key"))
+        if not has_vision:
+            return
+        card = None
     if card:
         counts["id"] += 1
         v = get_values(card, cfg, store, bool(detect_grade(l.text)))
@@ -1153,8 +1160,12 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             store.best(day, near.profit, f"{near.card['name']} voor €{l.price_eur:.0f} ({l.url})")
         if not d and cfg.get("bid_alerts", True):
             b = bid_chance(l, card, v, cfg)
-            if b and not store.kv_get(f"bidsent:{l.id}"):
+            ck = f"bidcard:{day}:{card['name']}"
+            if b and not store.kv_get(f"bidsent:{l.id}") and not store.kv_get(ck) \
+                    and counts.get("sent", 0) < int(cfg.get("max_messages_per_run", 3)):
                 store.kv_set(f"bidsent:{l.id}", 1)
+                store.kv_set(ck, 1)
+                counts["sent"] = counts.get("sent", 0) + 1
                 store.inc(day, "bids")
                 log.info("BOD-KANS: %s waarde €%s", card["name"], b["market"])
                 try:
@@ -1170,6 +1181,10 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         deals.append(d)
         store.inc(day, "deals")
         log.info("DEAL%s: %s", " (oud)" if old else "", format_deal(d)[0])
+        if counts.get("sent", 0) >= int(cfg.get("max_messages_per_run", 3)):
+            counts.setdefault("overflow", []).append(d)
+            return
+        counts["sent"] = counts.get("sent", 0) + 1
         try:
             send_deal(cfg, d)
         except Exception as e:
@@ -1220,6 +1235,15 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
                 process_listing(l, cfg, store, day, counts, deals, old=True)
             time.sleep(2)
 
+    extra = counts.get("overflow") or []
+    if extra:
+        extra.sort(key=lambda d: -d.profit)
+        lines = [f"• **+€{d.profit:.0f}** {d.card['name'][:60]} voor €{d.listing.price_eur:.0f}: {d.listing.url}"
+                 for d in extra[:10]]
+        try:
+            notify(cfg, f"📋 Nog {len(extra)} deals", "\n".join(lines), priority=3)
+        except Exception as e:
+            log.error("Samenvatting mislukt: %s", e)
     store.inc(day, "new", counts["new"]); store.inc(day, "identified", counts["id"])
     store.inc(day, "valued", counts["val"])
     log.info("Run klaar: %d bekeken (%d oud), %d herkend, %d met prijs, %d deals",

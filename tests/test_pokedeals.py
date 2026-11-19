@@ -392,3 +392,22 @@ def test_whole_word_name_matching():
     assert pd._pokemon_matches("Porygon-Z", t)
     assert not pd._pokemon_matches("Mew", "mewtwo gx 12/100")
     assert pd._pokemon_matches("Umbreon VMAX", "moonbreon umbreon vmax 215/203")
+
+
+def test_quiet_mode(tmp_path):
+    store = pd.Store(tmp_path / "q.db")
+    cfg = {**CFG, "searches": ["p"], "backfill_pages": 0, "daily_summary_hour": -1, "max_messages_per_run": 2}
+    ls = [pd.parse_mp_listing(mp(f"m{i}", "Moonbreon", 50000 + i)) for i in range(5)]
+    unsure = pd.parse_mp_listing(mp("u", "Charizard VMAX", 1000))
+    sent, summ = [], []
+    def ident(l, c, s):
+        return {"name": "Charizard VMAX", "tcgdex_ids": ["a", "b"], "auto": True, "uncertain": True} if l.id == "u" else None
+    with mock.patch.object(pd, "fetch_marktplaats", return_value=ls + [unsure]), \
+         mock.patch.object(pd, "auto_identify", side_effect=ident), \
+         mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000)), \
+         mock.patch.object(pd, "send_deal", side_effect=lambda c, d: sent.append(d.listing.id)), \
+         mock.patch.object(pd, "notify", side_effect=lambda c, t, m, **k: summ.append(t)), \
+         mock.patch.object(pd.time, "sleep"):
+        deals = pd.run_once(cfg, store)
+    assert len(sent) == 2 and len(deals) == 5 and summ == ["📋 Nog 3 deals"]
+    assert "u" not in [d.listing.id for d in deals]
