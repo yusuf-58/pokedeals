@@ -90,6 +90,7 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS best (day TEXT PRIMARY KEY, profit REAL, txt TEXT)")
         self.db.execute("CREATE TABLE IF NOT EXISTS evaluated (id TEXT PRIMARY KEY, price REAL, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS slabs (id TEXT PRIMARY KEY, grade TEXT, toks TEXT, price REAL, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, score REAL, kind TEXT, data TEXT, ts REAL)")
         self.db.commit()
 
@@ -512,6 +513,59 @@ def slab_query(listing: Listing) -> str:
                r"psa|cgc|bgs|beckett|sgc|tag|ace|nieuw|new|excellent)\b", " ", t, flags=re.I)
     words = re.findall(r"[a-zA-Zé]+|\d{1,3}/\d{1,3}|\d{1,3}", t)
     return " ".join(words[:6])
+
+
+# ---------------------------------------------------------------- Marktplaats-vergelijking (gratis)
+SLAB_GENERIC = {"psa", "cgc", "bgs", "sgc", "tag", "ace", "beckett", "gem", "mint", "graded", "slab",
+                "pokemon", "pokémon", "kaart", "kaarten", "card", "cards", "holo", "rare", "nm", "near",
+                "te", "koop", "nieuw", "new", "excellent", "perfect", "japans", "japanese", "english",
+                "engels", "en", "de", "het", "met", "and", "the", "of", "promo", "black", "star", "promos"}
+
+
+def slab_tokens(title: str) -> list[str]:
+    t = GRADE_RE.sub(" ", title.lower())
+    toks = re.findall(r"[a-zé]+|\d{1,3}/\d{1,3}", t)
+    return [w for w in toks if w not in SLAB_GENERIC and w not in NAME_SKIP and len(w) > 2 or "/" in w]
+
+
+def remember_slab(l: Listing, grade: str, store: Store):
+    if not l.price_eur or l.price_eur < 10 or BAD_COND_RE.search(l.text) or JUNK_RE.search(l.text):
+        return
+    if re.search(r"\b(lot|bundel|collectie|verzameling|set van|\d+\s*x)\b", l.text, re.I):
+        return  # meerdere kaarten: geen goede vergelijking
+    toks = slab_tokens(l.title)
+    if len(toks) >= 2:
+        store.db.execute("INSERT OR REPLACE INTO slabs VALUES (?,?,?,?,?)",
+                         (l.id, grade, " ".join(toks), l.price_eur, time.time()))
+        store.db.commit()
+
+
+def marktplaats_slab_value(l: Listing, grade: str, store: Store, cfg: dict) -> tuple[float | None, int]:
+    """Mediaan van vergelijkbare slabs (zelfde kaart + cijfer) op Marktplaats, laatste 30 dagen."""
+    me = slab_tokens(l.title)
+    if len(me) < 2:
+        return None, 0
+    num_me = [w for w in me if "/" in w]
+    words_me = {w for w in me if "/" not in w}
+    rows = store.db.execute("SELECT id, toks, price FROM slabs WHERE grade=? AND ts>? AND id<>?",
+                            (grade, time.time() - 30 * 86400, l.id)).fetchall()
+    prices = []
+    for _id, toks, price in rows:
+        other = toks.split()
+        num_o = [w for w in other if "/" in w]
+        words_o = {w for w in other if "/" not in w}
+        shared = words_me & words_o
+        if num_me and num_o:
+            ok = num_me[0] == num_o[0] and len(shared) >= 1      # zelfde kaartnummer + naam
+        else:
+            ok = len(shared) >= 2 and len(shared) >= min(len(words_me), len(words_o)) - 1
+        if ok:
+            prices.append(price)
+    n = len(prices)
+    if n < int(cfg.get("mp_comps_min", 3)):
+        return None, n
+    prices.sort()
+    return round(prices[n // 2] if n % 2 else (prices[n // 2 - 1] + prices[n // 2]) / 2, 2), n
 
 
 # ---------------------------------------------------------------- TCGdex (gratis, geen key)
@@ -1023,7 +1077,8 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
         if not target:
             return None  # geen betrouwbare prijs voor dit cijfer/bedrijf
         market = target
-        sell = target * (1 - c["ebay_fee_pct"] / 100) - c["ebay_ship_eur"]
+        fee = 0 if card.get("mp_comps") else c["ebay_fee_pct"]          # doorverkopen op Marktplaats = geen fee
+        sell = target * (1 - fee / 100) - c["ebay_ship_eur"]
         kind = "graded"
     else:
         if not v.raw:
@@ -1326,15 +1381,19 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             return
         card = None
     grade = detect_grade(l.text)
+    if grade:
+        remember_slab(l, grade, store)
     use_ebay = grade and all(ebay_creds(cfg))
-    if not card and use_ebay:
+    use_comps = grade and cfg.get("mp_comps", True)
+    if not card and (use_ebay or use_comps):
         q = slab_query(l)
         if len(_name_words(q)) >= 2:
             card = {"name": q, "auto": True, "slab": True, "ebay_query": q}
     if card:
         counts["id"] += 1
         v = get_values(card, cfg, store, bool(grade)) if not card.get("ebay_query") else Values()
-        if use_ebay:
+        v.grades = dict(v.grades)
+        if use_ebay and grade:
             known = {"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade) or v.grades.get(grade)
             if not known:
                 q = card.get("ebay_query") or card.get("ppt_search") or slab_query(l)
@@ -1346,6 +1405,18 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                     elif grade == "PSA 9":
                         v.psa9 = ev
                     v.sources = v.sources + [f"eBay {grade} ({n} advertenties, laagste kwart)"]
+        if use_comps:
+            known = {"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade) or v.grades.get(grade)
+            if not known:
+                mv, n = marktplaats_slab_value(l, grade, store, cfg)
+                if mv:
+                    v.grades = {**v.grades, grade: mv}
+                    if grade == "PSA 10":
+                        v.psa10 = mv
+                    elif grade == "PSA 9":
+                        v.psa9 = mv
+                    v.sources = v.sources + [f"Marktplaats: mediaan van {n} dezelfde slabs"]
+                    card = {**card, "mp_comps": True}
         d = evaluate(l, card, v, cfg)
         if d and l.price_type != "FIXED" and cfg.get("check_bids", True):
             hb = fetch_highest_bid(l, store)

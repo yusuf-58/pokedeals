@@ -51,6 +51,10 @@ ppt_api_key: ""          # pokemonpricetracker.com = hoofdbron (raw + PSA). Grat
 # pokemontcg.io stopt (geen nieuwe keys). Werkt nog zonder key voor
 # Cardmarket-prijzen; valt daarna vanzelf terug op pokemonpricetracker.
 pokemontcg_api_key: ""
+# Gratis slab-prijzen uit Marktplaats zelf: mediaan van dezelfde kaart + cijfer (laatste 30 dagen)
+mp_comps: true
+mp_comps_min: 3              # minimaal zoveel vergelijkbare slabs nodig
+
 # eBay (gratis developer-account) voor slab-prijzen. Secrets: EBAY_CLIENT_ID + EBAY_CLIENT_SECRET
 ebay:
   marketplace: "EBAY_DE"     # Europese prijzen in EUR (EBAY_NL kan ook)

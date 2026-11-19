@@ -496,3 +496,23 @@ def test_ebay_slab_value(tmp_path):
          mock.patch.object(pd, "ebay_graded_value", return_value=(1000.0, 5)), mock.patch.object(pd.time, "sleep"):
         pd.process_listing(l, {**cfg, "batch_minutes": 0, "instant_topdeals": False}, st, "d", counts, deals)
     assert deals and deals[0].grade == "PSA 10" and deals[0].market == 1000.0 and "eBay" in deals[0].source
+
+
+def test_marktplaats_comps(tmp_path):
+    st = pd.Store(tmp_path / "c.db")
+    for i, p in enumerate([400, 420, 450, 480, 500]):
+        pd.remember_slab(pd.parse_mp_listing(mp(f"c{i}", f"Umbreon VMAX 215/203 PSA 10 Gem Mint #{i}", p * 100)), "PSA 10", st)
+    pd.remember_slab(pd.parse_mp_listing(mp("x9", "Umbreon VMAX 215/203 PSA 9", 20000)), "PSA 9", st)
+    pd.remember_slab(pd.parse_mp_listing(mp("lot", "Lot 5x PSA 10 Umbreon VMAX 215/203", 10000)), "PSA 10", st)
+    cheap = pd.parse_mp_listing(mp("new", "PSA 10 Umbreon VMAX 215/203 moonbreon", 25000))
+    val, n = pd.marktplaats_slab_value(cheap, "PSA 10", st, REAL_CFG)
+    assert n == 5 and val == 450.0
+    other = pd.parse_mp_listing(mp("o", "Charizard VMAX PSA 10", 25000))
+    assert pd.marktplaats_slab_value(other, "PSA 10", st, REAL_CFG)[0] is None
+    # hele flow zonder keys: deal op basis van Marktplaats-mediaan
+    counts = {"new": 0, "id": 0, "val": 0}; deals = []
+    cfg = {**REAL_CFG, "ebay": {}, "batch_minutes": 0, "instant_topdeals": False, "min_profit_eur": 150}
+    with mock.patch.object(pd, "auto_identify", return_value=None), mock.patch.object(pd, "match_card", return_value=None), \
+         mock.patch.object(pd.time, "sleep"):
+        pd.process_listing(cheap, cfg, st, "d", counts, deals)
+    assert deals and deals[0].market == 450.0 and "Marktplaats" in deals[0].source
