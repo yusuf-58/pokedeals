@@ -314,8 +314,8 @@ def test_bid_chance_and_stats(tmp_path):
          mock.patch.object(pd, "send_daily_summary", side_effect=lambda *a: sent.append("sum")), \
          mock.patch.object(pd.time, "sleep"):
         store.mark("dummy")
-        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0}, store)
-        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0}, store)
+        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0, "batch_minutes": 0}, store)
+        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0, "batch_minutes": 0}, store)
     day = pd.local_now().strftime("%Y-%m-%d")
     st = store.stats(day)
     assert st["new"] == 2 and st["identified"] == 2 and st["bids"] == 1
@@ -394,20 +394,22 @@ def test_whole_word_name_matching():
     assert pd._pokemon_matches("Umbreon VMAX", "moonbreon umbreon vmax 215/203")
 
 
-def test_quiet_mode(tmp_path):
+def test_batch_mode(tmp_path):
     store = pd.Store(tmp_path / "q.db")
-    cfg = {**CFG, "searches": ["p"], "backfill_pages": 0, "daily_summary_hour": -1, "max_messages_per_run": 2}
-    ls = [pd.parse_mp_listing(mp(f"m{i}", "Moonbreon", 50000 + i)) for i in range(5)]
-    unsure = pd.parse_mp_listing(mp("u", "Charizard VMAX", 1000))
-    sent, summ = [], []
-    def ident(l, c, s):
-        return {"name": "Charizard VMAX", "tcgdex_ids": ["a", "b"], "auto": True, "uncertain": True} if l.id == "u" else None
-    with mock.patch.object(pd, "fetch_marktplaats", return_value=ls + [unsure]), \
-         mock.patch.object(pd, "auto_identify", side_effect=ident), \
+    cfg = {**CFG, "searches": ["p"], "backfill_pages": 0, "daily_summary_hour": -1,
+           "batch_size": 2, "batch_minutes": 30}
+    ls = [pd.parse_mp_listing(mp(f"m{i}", "Moonbreon", 70000 + i * 1000)) for i in range(4)]
+    top = pd.parse_mp_listing(mp("top", "Moonbreon", 30000))
+    sent = []
+    with mock.patch.object(pd, "fetch_marktplaats", return_value=ls + [top]), \
          mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000)), \
          mock.patch.object(pd, "send_deal", side_effect=lambda c, d: sent.append(d.listing.id)), \
-         mock.patch.object(pd, "notify", side_effect=lambda c, t, m, **k: summ.append(t)), \
          mock.patch.object(pd.time, "sleep"):
-        deals = pd.run_once(cfg, store)
-    assert len(sent) == 2 and len(deals) == 5 and summ == ["📋 Nog 3 deals"]
-    assert "u" not in [d.listing.id for d in deals]
+        pd.run_once(cfg, store)
+        assert sent[0] == "top"                       # topdeal meteen
+        assert sent[1:] == ["m0", "m1"]               # daarna beste 2 (hoogste winst)
+        pd.run_once(cfg, store)                       # binnen 30 min: niks extra
+        assert len(sent) == 3
+        store.kv_set("last_flush", 0)                 # 30 min later
+        pd.flush_queue(cfg, store)
+    assert sent[3:] == ["m2", "m3"]

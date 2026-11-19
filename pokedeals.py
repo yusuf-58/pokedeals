@@ -90,6 +90,7 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS best (day TEXT PRIMARY KEY, profit REAL, txt TEXT)")
         self.db.execute("CREATE TABLE IF NOT EXISTS evaluated (id TEXT PRIMARY KEY, price REAL, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, score REAL, kind TEXT, data TEXT, ts REAL)")
         self.db.commit()
 
     def needs_eval(self, lid: str, price) -> bool:
@@ -101,6 +102,19 @@ class Store:
     def mark_eval(self, lid: str, price):
         self.db.execute("INSERT OR REPLACE INTO evaluated VALUES (?,?,?)", (lid, price, time.time()))
         self.db.commit()
+
+    def enqueue(self, qid: str, score: float, kind: str, data: dict):
+        self.db.execute("INSERT OR REPLACE INTO queue VALUES (?,?,?,?,?)",
+                        (qid, score, kind, json.dumps(data, default=str), time.time()))
+        self.db.commit()
+
+    def take_best(self, n: int, max_age_h: float) -> list:
+        self.db.execute("DELETE FROM queue WHERE ts < ?", (time.time() - max_age_h * 3600,))
+        rows = self.db.execute("SELECT id, kind, data FROM queue ORDER BY score DESC LIMIT ?", (n,)).fetchall()
+        for r in rows:
+            self.db.execute("DELETE FROM queue WHERE id=?", (r[0],))
+        self.db.commit()
+        return [(k, json.loads(d)) for _, k, d in rows]
 
     def kv_get(self, k: str, default=None):
         row = self.db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
@@ -1133,6 +1147,21 @@ def send_daily_summary(cfg: dict, store: Store, day: str):
     notify(cfg, f"📊 PokeDeals dagoverzicht {day}", "\n".join(lines), priority=3)
 
 
+def _deal_to_dict(d: Deal) -> dict:
+    from dataclasses import asdict
+    return asdict(d)
+
+
+def _deal_from_dict(x: dict) -> Deal:
+    x = dict(x)
+    x["listing"] = Listing(**x["listing"])
+    return Deal(**x)
+
+
+def is_topdeal(d: Deal) -> bool:
+    return d.profit >= 300
+
+
 def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                     deals: list, old: bool = False):
     loose = {**cfg, "min_profit_eur": -1e9, "min_margin_pct": -1e9}
@@ -1161,17 +1190,14 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         if not d and cfg.get("bid_alerts", True):
             b = bid_chance(l, card, v, cfg)
             ck = f"bidcard:{day}:{card['name']}"
-            if b and not store.kv_get(f"bidsent:{l.id}") and not store.kv_get(ck) \
-                    and counts.get("sent", 0) < int(cfg.get("max_messages_per_run", 3)):
+            if b and not store.kv_get(f"bidsent:{l.id}") and not store.kv_get(ck):
                 store.kv_set(f"bidsent:{l.id}", 1)
                 store.kv_set(ck, 1)
-                counts["sent"] = counts.get("sent", 0) + 1
                 store.inc(day, "bids")
                 log.info("BOD-KANS: %s waarde €%s", card["name"], b["market"])
-                try:
-                    send_bid_chance(cfg, l, card, b)
-                except Exception as e:
-                    log.error("Bod-kans melding mislukt: %s", e)
+                from dataclasses import asdict
+                store.enqueue("bid:" + l.id, float(cfg["min_profit_eur"]), "bid",
+                              {"listing": asdict(l), "card": {"name": card["name"]}, "b": b})
     else:
         d = evaluate_lot(l, cfg, store)
     if d:
@@ -1181,14 +1207,13 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         deals.append(d)
         store.inc(day, "deals")
         log.info("DEAL%s: %s", " (oud)" if old else "", format_deal(d)[0])
-        if counts.get("sent", 0) >= int(cfg.get("max_messages_per_run", 3)):
-            counts.setdefault("overflow", []).append(d)
-            return
-        counts["sent"] = counts.get("sent", 0) + 1
-        try:
-            send_deal(cfg, d)
-        except Exception as e:
-            log.error("Melding mislukt: %s", e)
+        if is_topdeal(d) and cfg.get("instant_topdeals", True):
+            try:
+                send_deal(cfg, d)
+            except Exception as e:
+                log.error("Melding mislukt: %s", e)
+        else:
+            store.enqueue("deal:" + l.id, d.profit, "deal", _deal_to_dict(d))
 
 
 def run_once(cfg: dict, store: Store) -> list[Deal]:
@@ -1235,15 +1260,7 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
                 process_listing(l, cfg, store, day, counts, deals, old=True)
             time.sleep(2)
 
-    extra = counts.get("overflow") or []
-    if extra:
-        extra.sort(key=lambda d: -d.profit)
-        lines = [f"• **+€{d.profit:.0f}** {d.card['name'][:60]} voor €{d.listing.price_eur:.0f}: {d.listing.url}"
-                 for d in extra[:10]]
-        try:
-            notify(cfg, f"📋 Nog {len(extra)} deals", "\n".join(lines), priority=3)
-        except Exception as e:
-            log.error("Samenvatting mislukt: %s", e)
+    flush_queue(cfg, store)
     store.inc(day, "new", counts["new"]); store.inc(day, "identified", counts["id"])
     store.inc(day, "valued", counts["val"])
     log.info("Run klaar: %d bekeken (%d oud), %d herkend, %d met prijs, %d deals",
@@ -1256,6 +1273,27 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
         except Exception as e:
             log.error("Dagoverzicht mislukt: %s", e)
     return deals
+
+
+def flush_queue(cfg: dict, store: Store, force: bool = False):
+    """Elke `batch_minutes` de beste `batch_size` deals uit de wachtrij sturen."""
+    every = float(cfg.get("batch_minutes", 30)) * 60
+    last = float(store.kv_get("last_flush", 0))
+    if not force and time.time() - last < every:
+        return 0
+    store.kv_set("last_flush", time.time())
+    items = store.take_best(int(cfg.get("batch_size", 3)), float(cfg.get("queue_max_age_hours", 3)))
+    for kind, data in items:
+        try:
+            if kind == "deal":
+                send_deal(cfg, _deal_from_dict(data))
+            else:
+                send_bid_chance(cfg, Listing(**data["listing"]), data["card"], data["b"])
+        except Exception as e:
+            log.error("Batch-melding mislukt: %s", e)
+    if items:
+        log.info("Batch verstuurd: %d berichten", len(items))
+    return len(items)
 
 
 def local_now():

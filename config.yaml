@@ -90,8 +90,11 @@ vision:
   min_listing_price: 10       # goedkopere advertenties niet scannen
   min_confidence: 0.75        # AI moet zo zeker zijn
 
-# Rustig houden: max zoveel losse berichten per run (rest in 1 lijstje)
-max_messages_per_run: 3
+# Rustig houden: deals worden verzameld en elke `batch_minutes` krijg je de beste `batch_size`.
+batch_minutes: 30
+batch_size: 3
+queue_max_age_hours: 3       # oudere deals uit de wachtrij vallen weg
+instant_topdeals: true       # TOPDEAL (€300+) meteen sturen
 # Deals waarbij de exacte versie onzeker is (geen kaartnummer) ook melden?
 allow_uncertain: false
 
