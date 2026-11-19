@@ -240,3 +240,35 @@ def test_low_grade_and_condition_not_valued_as_raw():
     l = pd.parse_mp_listing(mp("y", "Moonbreon PSA 10", 400000))
     d = pd.evaluate(l, card, v, REAL_CFG)
     assert d and d.grade == "PSA 10" and "Te mooi" in d.grading_note and d.source
+
+
+def test_pricecharting(tmp_path):
+    store = pd.Store(tmp_path / "pc.db")
+    cfg = {**REAL_CFG, "pricecharting_token": "tok"}
+    pc = {"status": "success", "id": "123", "product-name": "Mewtwo Star #103",
+          "console-name": "Pokemon Holon Phantoms",
+          "loose-price": 400000, "condition-14-price": 300000, "graded-price": 600000,
+          "manual-only-price": 2000000, "condition-17-price": 1500000}
+    resp = mock.Mock(); resp.json = lambda: pc
+    with mock.patch.object(pd.requests, "get", return_value=resp) as g, mock.patch.object(pd.time, "sleep"):
+        card = pd.auto_identify(pd.parse_mp_listing(mp("a", "Gold Star Mewtwo Holon Phantoms PSA 4", 200000)), cfg, store)
+        assert card and card["pc_query"]
+        v = pd.get_values(card, cfg, store)
+        assert g.call_args.kwargs["params"]["t"] == "tok"
+    assert v.grades["4"] == 2760.0 and v.psa10 == 18400.0 and v.grades["CGC 10"] == 13800.0
+    # PSA 4 voor 2300 -> waarde 2760 (na fees ~2393) = te weinig winst
+    l = pd.parse_mp_listing(mp("b", "Gold Star Mewtwo PSA 4", 230000))
+    assert pd.evaluate(l, card, v, cfg) is None
+    # PSA 4 voor 1500 -> deal, gewaardeerd als PSA 4 (niet als raw!)
+    l = pd.parse_mp_listing(mp("c", "Gold Star Mewtwo PSA 4", 150000))
+    d = pd.evaluate(l, card, v, cfg)
+    assert d and d.market == 2760.0 and d.grade == "PSA 4" and "PriceCharting" in d.source
+    # CGC 10 gebruikt eigen CGC-prijs
+    l = pd.parse_mp_listing(mp("d", "Gold Star Mewtwo CGC 10", 900000))
+    assert pd.evaluate(l, card, v, cfg).market == 13800.0
+    # sealed zonder eigen prijs -> PriceCharting
+    sealed = {"name": "Evolving Skies Booster Box", "type": "sealed"}
+    resp2 = mock.Mock(); resp2.json = lambda: {"status": "success", "product-name": "Booster Box",
+                                               "console-name": "Pokemon Evolving Skies", "loose-price": 100000}
+    with mock.patch.object(pd.requests, "get", return_value=resp2), mock.patch.object(pd.time, "sleep"):
+        assert pd.get_values(sealed, cfg, store).raw == 920.0

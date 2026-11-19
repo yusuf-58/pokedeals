@@ -61,6 +61,7 @@ class Values:
     psa9: float | None = None
     psa10: float | None = None
     sources: list[str] = field(default_factory=list)
+    grades: dict = field(default_factory=dict)   # bv {"PSA 4": 120.0, "CGC 10": 900.0}
 
 
 @dataclass
@@ -228,6 +229,65 @@ def ppt_card(search: str, cfg: dict, store: Store, language: str) -> dict | None
     return out or None
 
 
+# ---------------------------------------------------------------- PriceCharting
+PC_KEYS = {  # PriceCharting-veld -> cijfer (bron: hun API-documentatie)
+    "loose-price": "RAW", "graded-price": "9", "manual-only-price": "PSA 10",
+    "new-price": "8", "cib-price": "7", "box-only-price": "9.5",
+    "condition-9-price": "1", "condition-10-price": "2", "condition-13-price": "3",
+    "condition-14-price": "4", "condition-15-price": "5", "condition-16-price": "6",
+    "bgs-10-price": "BGS 10", "condition-17-price": "CGC 10", "condition-18-price": "SGC 10",
+    "condition-20-price": "BGS 10 Black", "condition-21-price": "TAG 10", "condition-22-price": "ACE 10",
+}
+_pc_last = [0.0]
+
+
+def pc_token(cfg: dict) -> str:
+    return os.getenv("PRICECHARTING_TOKEN") or cfg.get("pricecharting_token") or ""
+
+
+def pc_product(query: str, cfg: dict, store: Store) -> dict | None:
+    """Beste match op PriceCharting -> {name, set, id, prices{cijfer: EUR}}. Gecached."""
+    token = pc_token(cfg)
+    if not token or not query:
+        return None
+    key = f"pc:{query.lower()}"
+    cached = store.cache_get(key)
+    if cached is not None:
+        return cached or None
+    wait = 1.1 - (time.time() - _pc_last[0])          # max 1 call per seconde
+    if wait > 0:
+        time.sleep(wait)
+    _pc_last[0] = time.time()
+    try:
+        r = requests.get("https://www.pricecharting.com/api/product",
+                         params={"t": token, "q": query}, timeout=20)
+        d = r.json()
+    except Exception as e:
+        log.warning("PriceCharting fout (%s): %s", query, e)
+        return None
+    out = {}
+    if d.get("status") == "success" and "pokemon" in (d.get("console-name") or "").lower():
+        fx = float(cfg.get("usd_to_eur", 0.92))
+        prices = {}
+        for k, g in PC_KEYS.items():
+            cents = d.get(k)
+            if isinstance(cents, (int, float)) and cents > 0:
+                prices[g] = round(cents / 100 * fx, 2)
+        out = {"name": d.get("product-name") or "", "set": d.get("console-name") or "",
+               "id": d.get("id"), "prices": prices}
+    store.cache_put(key, out)
+    return out or None
+
+
+def pc_values(query: str, cfg: dict, store: Store) -> Values | None:
+    p = pc_product(query, cfg, store)
+    if not p or not p["prices"]:
+        return None
+    pr = p["prices"]
+    return Values(raw=pr.get("RAW"), psa9=pr.get("9"), psa10=pr.get("PSA 10"),
+                  sources=[f"PriceCharting ({p['name']})"], grades=pr)
+
+
 def jp_identify(listing: Listing, cfg: dict, store: Store, language: str = "japanese") -> dict | None:
     """Kaart herkennen via titel (+ nummer) op pokemonpricetracker."""
     words = [w for w in re.findall(r"[a-zA-Zé]+|\d{1,3}/\d{1,3}", listing.title)
@@ -236,6 +296,15 @@ def jp_identify(listing: Listing, cfg: dict, store: Store, language: str = "japa
     if len(words) < 2:
         return None
     search = " ".join(words[:5])
+    if pc_token(cfg):
+        q = search + (" japanese" if language == "japanese" else "")
+        p = pc_product(q, cfg, store)
+        if p and p.get("name") and p["name"].split()[0].lower() in listing.text:
+            flag = "🇯🇵 " if language == "japanese" else ""
+            return {"name": f"{flag}{p['name']} ({p['set']})", "ppt_search": search,
+                    "pc_query": q, "language": language, "auto": True}
+        if p is not None:
+            return None
     c = ppt_card(search, cfg, store, language)
     if not c or not c.get("name"):
         return None
@@ -512,9 +581,22 @@ def _find_grade(obj, grade: str):
 def get_values(card: dict, cfg: dict, store: Store, want_graded: bool = False) -> Values:
     """Raw: Cardmarket (pokemontcg.io, zolang die werkt) anders pokemonpricetracker.
     Graded: eBay-verkopen via pokemonpricetracker. Handmatige waardes winnen."""
-    if card.get("type") == "sealed":
-        return Values(raw=_num(card.get("value_eur")), sources=["handmatig (sealed)"])
     lang = card.get("language") or "english"
+    if card.get("type") == "sealed":
+        if _num(card.get("value_eur")):
+            return Values(raw=_num(card.get("value_eur")), sources=["handmatig (sealed)"])
+        pv = pc_values(card.get("pc_query") or card["name"], cfg, store) if pc_token(cfg) else None
+        return pv or Values()
+    if pc_token(cfg):
+        q = card.get("pc_query") or card.get("ppt_search") or card["name"]
+        if lang == "japanese" and "japan" not in q.lower():
+            q += " japanese"
+        pv = pc_values(q, cfg, store)
+        if pv:
+            for attr, ck in (("raw", "raw_value_eur"), ("psa9", "psa9_value_eur"), ("psa10", "psa10_value_eur")):
+                if _num(card.get(ck)):
+                    setattr(pv, attr, float(card[ck]))
+            return pv
     v = Values()
     key = "val:" + (card.get("pokemontcg_id") or card["name"])
     cached = store.cache_get(key)
@@ -574,6 +656,11 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
 
     if grade:
         target = {"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade)
+        if v.grades:
+            co, num = grade.split(" ", 1)
+            target = (v.grades.get(grade)                      # bv "CGC 10", "PSA 10"
+                      or (v.grades.get(num) if not num.startswith("10") else None)  # "4", "9.5"
+                      or (target if co == "PSA" else None))
         if not target:
             return None  # geen betrouwbare prijs voor dit cijfer/bedrijf
         market = target

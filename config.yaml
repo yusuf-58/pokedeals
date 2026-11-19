@@ -42,6 +42,9 @@ ppt_api_key: ""          # pokemonpricetracker.com = hoofdbron (raw + PSA). Grat
 # pokemontcg.io stopt (geen nieuwe keys). Werkt nog zonder key voor
 # Cardmarket-prijzen; valt daarna vanzelf terug op pokemonpricetracker.
 pokemontcg_api_key: ""
+# PriceCharting (betaald): beste bron, prijzen per cijfer + sealed.
+# Zet als GitHub secret PRICECHARTING_TOKEN (niet hier invullen).
+pricecharting_token: ""
 usd_to_eur: 0.92         # omrekening voor eBay-prijzen in dollars
 
 # Wanneer is iets een deal?

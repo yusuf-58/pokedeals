@@ -44,6 +44,7 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
           PPT_API_KEY: ${{ secrets.PPT_API_KEY }}
+          PRICECHARTING_TOKEN: ${{ secrets.PRICECHARTING_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           if [ "${{ inputs.test }}" = "true" ]; then
