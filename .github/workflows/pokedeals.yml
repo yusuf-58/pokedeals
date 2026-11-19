@@ -45,6 +45,8 @@ jobs:
           POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
           PPT_API_KEY: ${{ secrets.PPT_API_KEY }}
           PRICECHARTING_TOKEN: ${{ secrets.PRICECHARTING_TOKEN }}
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           POKEDEALS_DEBUG: "1"
         run: |

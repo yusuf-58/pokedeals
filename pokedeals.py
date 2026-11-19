@@ -420,6 +420,98 @@ def jp_identify(listing: Listing, cfg: dict, store: Store, language: str = "japa
             "language": language, "auto": True}
 
 
+# ---------------------------------------------------------------- eBay (officiële Browse API)
+EBAY_BAD = re.compile(r"\b(lot|bundle|proxy|fake|replica|custom|orica|read|case only|empty|leer|leeg|"
+                      r"sticker|poster|digital|code|sleeve|binder|choose|pick|auswahl|wählen)\b", re.I)
+
+
+def ebay_creds(cfg: dict):
+    e = cfg.get("ebay") or {}
+    return (os.getenv("EBAY_CLIENT_ID") or e.get("client_id"),
+            os.getenv("EBAY_CLIENT_SECRET") or e.get("client_secret"))
+
+
+def ebay_token(cfg: dict, store: Store) -> str | None:
+    cid, sec = ebay_creds(cfg)
+    if not cid or not sec:
+        return None
+    tok = store.kv_get("ebay_token")
+    exp = float(store.kv_get("ebay_token_exp", 0))
+    if tok and time.time() < exp - 60:
+        return tok
+    try:
+        r = requests.post("https://api.ebay.com/identity/v1/oauth2/token", auth=(cid, sec), timeout=20,
+                          data={"grant_type": "client_credentials",
+                                "scope": "https://api.ebay.com/oauth/api_scope"})
+        r.raise_for_status()
+        d = r.json()
+    except Exception as e:
+        log.warning("eBay token mislukt: %s", e)
+        return None
+    store.kv_set("ebay_token", d["access_token"])
+    store.kv_set("ebay_token_exp", time.time() + float(d.get("expires_in", 7200)))
+    return d["access_token"]
+
+
+def _grade_re(grade: str) -> re.Pattern:
+    co, num = grade.split(" ", 1)
+    co = "(?:bgs|beckett)" if co == "BGS" else co.lower()
+    return re.compile(rf"\b{co}\s*[-:#]?\s*{re.escape(num)}(?![\d.])", re.I)
+
+
+def ebay_graded_value(query: str, grade: str, cfg: dict, store: Store) -> tuple[float | None, int]:
+    """Voorzichtige marktwaarde (EUR) van een slab: 25e percentiel van huidige eBay-advertenties."""
+    key = f"ebay:{grade}:{query.lower()}"
+    cached = store.cache_get(key)
+    if cached is not None:
+        return cached[0], cached[1]
+    tok = ebay_token(cfg, store)
+    if not tok:
+        return None, 0
+    day = time.strftime("%Y-%m-%d")
+    used = int(float(store.kv_get(f"ebaycalls:{day}", 0)))
+    if used >= int((cfg.get("ebay") or {}).get("daily_budget", 4000)):
+        return None, 0
+    store.kv_set(f"ebaycalls:{day}", used + 1)
+    try:
+        r = requests.get("https://api.ebay.com/buy/browse/v1/item_summary/search", timeout=20,
+                         headers={"Authorization": f"Bearer {tok}",
+                                  "X-EBAY-C-MARKETPLACE-ID": (cfg.get("ebay") or {}).get("marketplace", "EBAY_DE")},
+                         params={"q": f"{query} {grade}", "limit": 50,
+                                 "filter": "buyingOptions:{FIXED_PRICE},priceCurrency:EUR"})
+        r.raise_for_status()
+        items = r.json().get("itemSummaries") or []
+    except Exception as e:
+        log.warning("eBay zoeken mislukt (%s): %s", query, e)
+        return None, 0
+    gre = _grade_re(grade)
+    core = [w for w in _name_words(query) if w not in NAME_SKIP and len(w) > 2]
+    prices = []
+    for it in items:
+        t = (it.get("title") or "").lower()
+        if not gre.search(t) or EBAY_BAD.search(t):
+            continue
+        if core and not all(w in _tokens(t) for w in core):
+            continue
+        pr = (it.get("price") or {})
+        if pr.get("currency") == "EUR" and _num(pr.get("value")):
+            prices.append(float(pr["value"]))
+    prices.sort()
+    n = len(prices)
+    val = round(prices[max(0, (n - 1) // 4)], 2) if n >= int((cfg.get("ebay") or {}).get("min_listings", 4)) else None
+    store.cache_put(key, [val, n])
+    return val, n
+
+
+def slab_query(listing: Listing) -> str:
+    """Zoekterm voor eBay uit de titel: zonder grader/cijfer/ruis."""
+    t = GRADE_RE.sub(" ", listing.title)
+    t = re.sub(r"\b(pokemon|pokémon|kaart|kaarten|card|cards|graded|slab|gem|mint|nm|te koop|"
+               r"psa|cgc|bgs|beckett|sgc|tag|ace|nieuw|new|excellent)\b", " ", t, flags=re.I)
+    words = re.findall(r"[a-zA-Zé]+|\d{1,3}/\d{1,3}|\d{1,3}", t)
+    return " ".join(words[:6])
+
+
 # ---------------------------------------------------------------- TCGdex (gratis, geen key)
 TCGDEX = "https://api.tcgdex.net/v2/en"
 _tcgdex_calls = [0]
@@ -1231,9 +1323,27 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         if not has_vision:
             return
         card = None
+    grade = detect_grade(l.text)
+    use_ebay = grade and all(ebay_creds(cfg))
+    if not card and use_ebay:
+        q = slab_query(l)
+        if len(_name_words(q)) >= 2:
+            card = {"name": q, "auto": True, "slab": True, "ebay_query": q}
     if card:
         counts["id"] += 1
-        v = get_values(card, cfg, store, bool(detect_grade(l.text)))
+        v = get_values(card, cfg, store, bool(grade)) if not card.get("ebay_query") else Values()
+        if use_ebay:
+            known = {"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade) or v.grades.get(grade)
+            if not known:
+                q = card.get("ebay_query") or card.get("ppt_search") or slab_query(l)
+                ev, n = ebay_graded_value(q, grade, cfg, store)
+                if ev:
+                    v.grades = {**v.grades, grade: ev}
+                    if grade == "PSA 10":
+                        v.psa10 = ev
+                    elif grade == "PSA 9":
+                        v.psa9 = ev
+                    v.sources = v.sources + [f"eBay {grade} ({n} advertenties, laagste kwart)"]
         d = evaluate(l, card, v, cfg)
         if d and l.price_type != "FIXED" and cfg.get("check_bids", True):
             hb = fetch_highest_bid(l, store)

@@ -473,3 +473,27 @@ def test_slab_identified_without_number(tmp_path):
     with mock.patch.object(pd, "ppt_card", return_value={"name": "Pikachu with Grey Felt Hat", "set": "SVP", "psa10": 1500.0}):
         c = pd.auto_identify(l, CFG, pd.Store(tmp_path / "x.db"))
     assert c and c["slab"]
+
+
+def test_ebay_slab_value(tmp_path):
+    st = pd.Store(tmp_path / "e.db")
+    cfg = {**REAL_CFG, "ebay": {"client_id": "a", "client_secret": "b", "min_listings": 4, "marketplace": "EBAY_DE"}}
+    tok = mock.Mock(); tok.raise_for_status = lambda: None; tok.json = lambda: {"access_token": "T", "expires_in": 7200}
+    items = [{"title": f"Pikachu Grey Felt Hat PSA 10 Van Gogh", "price": {"value": str(p), "currency": "EUR"}}
+             for p in (900, 1000, 1100, 1200, 1300)]
+    items += [{"title": "Pikachu Grey Felt Hat PSA 9", "price": {"value": "400", "currency": "EUR"}},
+              {"title": "Pikachu Grey Felt Hat PSA 10 LOT x3", "price": {"value": "100", "currency": "EUR"}},
+              {"title": "Pikachu Grey Felt Hat PSA 100", "price": {"value": "1", "currency": "EUR"}}]
+    res = mock.Mock(); res.raise_for_status = lambda: None; res.json = lambda: {"itemSummaries": items}
+    with mock.patch.object(pd.requests, "post", return_value=tok), mock.patch.object(pd.requests, "get", return_value=res) as g:
+        val, n = pd.ebay_graded_value("Pikachu Grey Felt Hat", "PSA 10", cfg, st)
+        assert g.call_args.kwargs["headers"]["Authorization"] == "Bearer T"
+    assert n == 5 and val == 1000.0                      # laagste kwart, PSA 9 / lot / PSA 100 eruit
+    l = pd.parse_mp_listing(mp("s", "Pikachu with Grey Felt Hat PSA 10 Gem Mint", 50000))
+    assert pd.slab_query(l) == "Pikachu with Grey Felt Hat"
+    # hele flow: slab zonder nummer en zonder PPT -> eBay-waarde -> deal
+    counts = {"new": 0, "id": 0, "val": 0}; deals = []
+    with mock.patch.object(pd, "auto_identify", return_value=None), \
+         mock.patch.object(pd, "ebay_graded_value", return_value=(1000.0, 5)), mock.patch.object(pd.time, "sleep"):
+        pd.process_listing(l, {**cfg, "batch_minutes": 0, "instant_topdeals": False}, st, "d", counts, deals)
+    assert deals and deals[0].grade == "PSA 10" and deals[0].market == 1000.0 and "eBay" in deals[0].source

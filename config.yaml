@@ -51,6 +51,12 @@ ppt_api_key: ""          # pokemonpricetracker.com = hoofdbron (raw + PSA). Grat
 # pokemontcg.io stopt (geen nieuwe keys). Werkt nog zonder key voor
 # Cardmarket-prijzen; valt daarna vanzelf terug op pokemonpricetracker.
 pokemontcg_api_key: ""
+# eBay (gratis developer-account) voor slab-prijzen. Secrets: EBAY_CLIENT_ID + EBAY_CLIENT_SECRET
+ebay:
+  marketplace: "EBAY_DE"     # Europese prijzen in EUR (EBAY_NL kan ook)
+  min_listings: 4            # minimaal zoveel vergelijkbare slabs nodig
+  daily_budget: 4000         # max zoekopdrachten per dag (gratis limiet is 5000)
+
 # PriceCharting (betaald): beste bron, prijzen per cijfer + sealed.
 # Zet als GitHub secret PRICECHARTING_TOKEN (niet hier invullen).
 pricecharting_token: ""
