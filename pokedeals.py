@@ -192,6 +192,12 @@ def ppt_card(search: str, cfg: dict, store: Store, language: str) -> dict | None
     api = os.getenv("PPT_API_KEY") or cfg.get("ppt_api_key") or ""
     if not api:
         return None
+    day = time.strftime("%Y-%m-%d")
+    used = store.cache_get(f"pptbudget:{day}") or 0
+    if used >= int(cfg.get("ppt_daily_budget", 90)):
+        log.info("PPT dagbudget op, morgen weer")
+        return None
+    store.cache_put(f"pptbudget:{day}", used + 1)
     try:
         r = requests.get("https://www.pokemonpricetracker.com/api/v2/cards",
                          params={"search": search, "limit": 1, "language": language,
@@ -246,6 +252,9 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
         return jp_identify(listing, cfg, store)
     m = NUM_RE.search(listing.title) or NUM_RE.search(listing.description)
     if not m:
+        # geen kaartnummer: probeer de titel zelf (bv. "Charizard VMAX rainbow")
+        if listing.price_eur and listing.price_eur >= float(cfg.get("title_lookup_min_price", 15)):
+            return jp_identify(listing, cfg, store, "english")
         return None
     num, total = m.group(1).upper(), m.group(2)
     key = f"auto:{num}/{total}"

@@ -209,3 +209,19 @@ def test_sealed():
     card["value_eur"] = None
     assert pd.evaluate(l, card, pd.get_values(card, CFG, None), REAL_CFG) is None
     assert pd.match_card(l, REAL_CFG["watchlist"])["type"] == "sealed"
+
+
+def test_title_lookup_and_budget(tmp_path):
+    store = pd.Store(tmp_path / "b.db")
+    l = pd.parse_mp_listing(mp("t", "Charizard VMAX rainbow rare NM", 20000))
+    ppt = {"name": "Charizard VMAX", "set": "Darkness Ablaze", "raw": 300.0}
+    with mock.patch.object(pd, "ppt_card", return_value=ppt):
+        c = pd.auto_identify(l, CFG, store)
+    assert c and "Charizard VMAX" in c["name"]
+    # budget: na 2 calls stopt hij
+    cfg = {**CFG, "ppt_api_key": "x", "ppt_daily_budget": 2}
+    resp = mock.Mock(); resp.raise_for_status = lambda: None; resp.json = lambda: {"data": []}
+    with mock.patch.object(pd.requests, "get", return_value=resp) as g:
+        for i in range(5):
+            pd.ppt_card(f"kaart {i}", cfg, store, "english")
+    assert g.call_count == 2

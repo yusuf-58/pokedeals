@@ -64,12 +64,15 @@ costs:
 # Automatische modus: herkent ook kaarten buiten je watchlist
 # via het kaartnummer in de titel (bv. "Pikachu 160/159").
 auto_mode: true
+# Ook advertenties ZONDER kaartnummer herkennen op titel (kost API-credits)
+title_lookup_min_price: 15   # goedkopere advertenties niet opzoeken
+ppt_daily_budget: 90         # max opzoekingen per dag (gratis = 100)
 
 # Foto's lezen met AI voor advertenties zonder kaartnummers,
 # bv. "pokemon kaarten verzameling". GRATIS via Google Gemini.
 # Gratis key: aistudio.google.com -> "Get API key" (of env var GEMINI_API_KEY)
 vision:
-  enabled: false
+  enabled: true               # doet pas iets als GEMINI_API_KEY is ingesteld
   provider: "gemini"          # gratis. ("claude" kan ook, maar is betaald)
   gemini_api_key: ""
   model: "gemini-2.5-flash"   # check in AI Studio welke Flash-modellen gratis zijn
