@@ -93,10 +93,12 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, score REAL, kind TEXT, data TEXT, ts REAL)")
         self.db.commit()
 
-    def needs_eval(self, lid: str, price) -> bool:
-        row = self.db.execute("SELECT price FROM evaluated WHERE id=?", (lid,)).fetchone()
+    def needs_eval(self, lid: str, price, recheck_hours: float = 12) -> bool:
+        row = self.db.execute("SELECT price, ts FROM evaluated WHERE id=?", (lid,)).fetchone()
         if row is None:
             return True
+        if time.time() - (row[1] or 0) > recheck_hours * 3600:
+            return True                                   # opnieuw bekijken (nieuwe prijsbronnen/keys)
         return price is not None and row[0] is not None and price < row[0] - 0.01  # prijs verlaagd
 
     def mark_eval(self, lid: str, price):
