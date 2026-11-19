@@ -419,9 +419,23 @@ def tcgdex_price(card: dict, fx: float) -> float | None:
     return round(min(mk) * fx, 2) if mk else None
 
 
+SYMBOLS = {"◇": ("prism", "◇"), "☆": ("star", "☆", "★"), "★": ("star", "☆", "★"),
+           "δ": ("delta", "δ"), "♀": ("♀", "female", "nidoran"), "♂": ("♂", "male", "nidoran")}
+
+
+def _name_words(name: str) -> list[str]:
+    return [w for w in re.findall(r"[a-zé]+", name.lower()) if len(w) > 1]
+
+
 def _name_in_text(name: str, text: str) -> bool:
-    words = [w for w in re.findall(r"[a-zé]+", name.lower()) if len(w) > 1]
-    return bool(words) and all(w in text for w in words)
+    words = _name_words(name)
+    if not words or not all(w in text for w in words):
+        return False
+    # speciale kaarten (Prism Star, Gold Star, Delta) alleen als dat ook in de advertentie staat
+    for sym, alts in SYMBOLS.items():
+        if sym in name and not any(a in text for a in alts):
+            return False
+    return True
 
 
 def tcgdex_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
@@ -462,8 +476,10 @@ def tcgdex_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
         fits = [c for c in res if isinstance(c, dict) and c.get("name") and _name_in_text(c["name"], t)]
         if not fits:
             continue
-        longest = max(len(c["name"]) for c in fits)            # "Charizard VMAX" > "Charizard"
-        fits = [c for c in fits if len(c["name"]) == longest][:8]
+        def score(c):  # meeste woorden + symbool = meest specifiek ("Charizard VMAX" > "Charizard")
+            return len(_name_words(c["name"])) + sum(1 for sym in SYMBOLS if sym in c["name"])
+        best = max(score(c) for c in fits)
+        fits = [c for c in fits if score(c) == best][:8]
         return {"name": f"{fits[0]['name']} (versie onzeker, laagste prijs)",
                 "tcgdex_ids": [c["id"] for c in fits], "ppt_search": fits[0]["name"],
                 "auto": True, "uncertain": len(fits) > 1}

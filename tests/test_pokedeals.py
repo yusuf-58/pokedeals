@@ -377,3 +377,10 @@ def test_tcgdex_number_and_name(tmp_path):
         assert c2 and set(c2["tcgdex_ids"]) == {"a", "b"} and c2["uncertain"]
         v2 = pd.get_values(c2, CFG, store)
         assert v2.raw == 92.0          # laagste versie (100 USD)
+
+
+def test_prism_star_not_matched_to_normal():
+    assert not pd._name_in_text("Giratina ◇", "giratina v alt art 186/196")
+    assert pd._name_in_text("Giratina ◇", "giratina prism star ultra prism")
+    assert pd._name_in_text("Charizard VMAX", "charizard vmax shiny")
+    assert not pd._name_in_text("Mewtwo ☆", "mewtwo ex")
