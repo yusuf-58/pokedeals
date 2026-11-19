@@ -100,7 +100,7 @@ allow_uncertain: false
 
 # Advertenties zonder vraagprijs ("Bieden", "n.o.t.k.") met waardevolle kaart melden
 bid_alerts: true
-bid_alert_min_value: 500     # alleen kaarten van minstens zoveel waard (zelfde kaart max 1x per dag)
+bid_alert_min_value: 0       # geen minimum: alleen of er €min_profit winst mogelijk is
 
 # Dagoverzicht in Discord (uur, Nederlandse tijd). -1 = uit
 daily_summary_hour: 21

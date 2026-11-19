@@ -831,7 +831,10 @@ def get_values(card: dict, cfg: dict, store: Store, want_graded: bool = False) -
                     v.sources.append("Cardmarket")
             except Exception as e:
                 log.info("pokemontcg.io niet bruikbaar (%s)", e)
-        need_ppt = (not v.raw) or want_graded or not card.get("auto")
+        if cfg.get("use_tcgdex", True) and lang == "english":
+            need_ppt = want_graded or (not v.raw and not card.get("auto"))  # tegoed sparen voor slabs
+        else:
+            need_ppt = (not v.raw) or want_graded or not card.get("auto")
         if need_ppt:
             c = ppt_card(card.get("ppt_search") or card["name"], cfg, store, lang) or {}
             if not v.raw and c.get("raw"):
