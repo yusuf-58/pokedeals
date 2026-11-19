@@ -7,6 +7,10 @@ interval_seconds: 60
 # (bij GitHub Actions elke 5-10 min: 50 zodat je niks mist)
 mp_limit: 100
 mp_pages: 2              # pagina's per zoekterm (voorbij de betaalde dagtoppers)
+# Achtergrondscan: elke run ook oudere advertenties bekijken (tot alles 1x bekeken is,
+# daarna opnieuw; prijsverlagingen worden opnieuw bekeken)
+backfill_pages: 3
+backfill_max_offset: 3000
 
 # Zoektermen op Marktplaats (nieuwste advertenties eerst).
 # Elke zoekterm = 1 verzoek per ronde. Houd het klein (2-4).
@@ -93,8 +97,7 @@ bid_alert_min_value: 300     # alleen kaarten van minstens zoveel waard
 # Dagoverzicht in Discord (uur, Nederlandse tijd). -1 = uit
 daily_summary_hour: 21
 
-# Bij eerste start: bestaande advertenties niet melden (anders spam)
-skip_existing_on_first_run: true
+skip_existing_on_first_run: false
 
 # ===== Watchlist: kaarten waar de bot op let =====
 # keywords: advertentie matcht als ÉÉN van deze zinnen in titel/omschrijving staat

@@ -49,6 +49,7 @@ class Listing:
     city: str = ""
     image: str | None = None
     images: list[str] = field(default_factory=list)
+    date: str = ""
 
     @property
     def text(self) -> str:
@@ -87,6 +88,26 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS prices (key TEXT PRIMARY KEY, ts REAL, data TEXT)")
         self.db.execute("CREATE TABLE IF NOT EXISTS stats (day TEXT, k TEXT, v REAL, PRIMARY KEY(day, k))")
         self.db.execute("CREATE TABLE IF NOT EXISTS best (day TEXT PRIMARY KEY, profit REAL, txt TEXT)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS evaluated (id TEXT PRIMARY KEY, price REAL, ts REAL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+        self.db.commit()
+
+    def needs_eval(self, lid: str, price) -> bool:
+        row = self.db.execute("SELECT price FROM evaluated WHERE id=?", (lid,)).fetchone()
+        if row is None:
+            return True
+        return price is not None and row[0] is not None and price < row[0] - 0.01  # prijs verlaagd
+
+    def mark_eval(self, lid: str, price):
+        self.db.execute("INSERT OR REPLACE INTO evaluated VALUES (?,?,?)", (lid, price, time.time()))
+        self.db.commit()
+
+    def kv_get(self, k: str, default=None):
+        row = self.db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
+        return row[0] if row else default
+
+    def kv_set(self, k: str, v):
+        self.db.execute("INSERT OR REPLACE INTO kv VALUES (?,?)", (k, str(v)))
         self.db.commit()
 
     def inc(self, day: str, k: str, n: float = 1):
@@ -160,15 +181,16 @@ def parse_mp_listing(raw: dict) -> Listing:
         city=(raw.get("location") or {}).get("cityName") or "",
         image=img,
         images=imgs,
+        date=str(raw.get("date") or ""),
     )
 
 
-def fetch_marktplaats(query: str, limit: int = 100, pages: int = 2) -> list[Listing]:
+def fetch_marktplaats(query: str, limit: int = 100, pages: int = 2, start: int = 0) -> list[Listing]:
     """Nieuwste advertenties. Dagtoppers (betaald, staan altijd bovenaan) tellen niet
     mee als 'nieuw', dus we bladeren door tot voorbij de dagtoppers."""
     out, n_prio = [], 0
     for page in range(pages):
-        params = {"query": query, "limit": limit, "offset": page * limit,
+        params = {"query": query, "limit": limit, "offset": start + page * limit,
                   "sortBy": "SORT_INDEX", "sortOrder": "DECREASING",
                   "viewOptions": "list-view"}
         r = requests.get(MP_SEARCH, params=params, timeout=20,
@@ -1067,7 +1089,7 @@ def send_daily_summary(cfg: dict, store: Store, day: str):
     st = store.stats(day)
     best = store.best(day)
     lines = [
-        f"👀 Nieuwe advertenties bekeken: **{int(st.get('new', 0))}**",
+        f"👀 Advertenties bekeken (nieuw + oud): **{int(st.get('new', 0))}**",
         f"🧠 Kaart herkend: **{int(st.get('identified', 0))}**",
         f"💶 Met prijs vergeleken: **{int(st.get('valued', 0))}**",
         f"💰 Deals gestuurd: **{int(st.get('deals', 0))}**",
@@ -1079,65 +1101,97 @@ def send_daily_summary(cfg: dict, store: Store, day: str):
     notify(cfg, f"📊 PokeDeals dagoverzicht {day}", "\n".join(lines), priority=3)
 
 
+def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
+                    deals: list, old: bool = False):
+    loose = {**cfg, "min_profit_eur": -1e9, "min_margin_pct": -1e9}
+    store.mark_eval(l.id, l.price_eur)
+    counts["new"] += 1
+    card = match_card(l, cfg.get("watchlist") or [])
+    if not card and cfg.get("auto_mode", True):
+        card = auto_identify(l, cfg, store)
+    d = None
+    if card:
+        counts["id"] += 1
+        v = get_values(card, cfg, store, bool(detect_grade(l.text)))
+        d = evaluate(l, card, v, cfg)
+        near = None if d else evaluate(l, card, v, loose)
+        if d or near:
+            counts["val"] += 1
+        if near:
+            store.best(day, near.profit, f"{near.card['name']} voor €{l.price_eur:.0f} ({l.url})")
+        if not d and cfg.get("bid_alerts", True):
+            b = bid_chance(l, card, v, cfg)
+            if b and not store.kv_get(f"bidsent:{l.id}"):
+                store.kv_set(f"bidsent:{l.id}", 1)
+                store.inc(day, "bids")
+                log.info("BOD-KANS: %s waarde €%s", card["name"], b["market"])
+                try:
+                    send_bid_chance(cfg, l, card, b)
+                except Exception as e:
+                    log.error("Bod-kans melding mislukt: %s", e)
+    else:
+        d = evaluate_lot(l, cfg, store)
+    if d:
+        if old:
+            extra = f"🕰️ Oudere advertentie" + (f" (geplaatst: {l.date})" if l.date else "")
+            d.grading_note = ((d.grading_note + "\n") if d.grading_note else "") + extra
+        deals.append(d)
+        store.inc(day, "deals")
+        log.info("DEAL%s: %s", " (oud)" if old else "", format_deal(d)[0])
+        try:
+            send_deal(cfg, d)
+        except Exception as e:
+            log.error("Melding mislukt: %s", e)
+
+
 def run_once(cfg: dict, store: Store) -> list[Deal]:
-    first = store.is_empty() and cfg.get("skip_existing_on_first_run", True)
     deals: list[Deal] = []
     now = local_now()
     day = now.strftime("%Y-%m-%d")
-    loose = {**cfg, "min_profit_eur": -1e9, "min_margin_pct": -1e9}
-    n_new = n_id = n_val = 0
+    counts = {"new": 0, "id": 0, "val": 0}
+    limit, pages = int(cfg.get("mp_limit", 100)), int(cfg.get("mp_pages", 2))
+
+    # 1) nieuwste advertenties
     for q in cfg["searches"]:
         try:
-            listings = fetch_marktplaats(q, int(cfg.get("mp_limit", 100)), int(cfg.get("mp_pages", 2)))
+            listings = fetch_marktplaats(q, limit, pages)
         except Exception as e:
             log.warning("Marktplaats fout (%s): %s", q, e)
             continue
-        log.info("%s: %d advertenties, %d al gezien", q, len(listings),
-                 sum(1 for x in listings if x.id and store.seen(x.id)))
-        for l in listings:
-            if not l.id or store.seen(l.id):
-                continue
+        todo = [l for l in listings if l.id and store.needs_eval(l.id, l.price_eur)]
+        log.info("%s: %d advertenties, %d te bekijken", q, len(listings), len(todo))
+        for l in todo:
             store.mark(l.id)
-            if first:
+            process_listing(l, cfg, store, day, counts, deals)
+        time.sleep(2)
+
+    # 2) achtergrondscan: elke run een stuk oudere advertenties
+    bf_pages = int(cfg.get("backfill_pages", 3))
+    max_off = int(cfg.get("backfill_max_offset", 3000))
+    n_old = 0
+    if bf_pages > 0:
+        for q in cfg["searches"]:
+            start = int(store.kv_get(f"cursor:{q}", pages * limit))
+            try:
+                listings = fetch_marktplaats(q, limit, bf_pages, start)
+            except Exception as e:
+                log.warning("Achtergrondscan fout (%s): %s", q, e)
                 continue
-            n_new += 1
-            card = match_card(l, cfg.get("watchlist") or [])
-            if not card and cfg.get("auto_mode", True):
-                card = auto_identify(l, cfg, store)
-            if card:
-                n_id += 1
-                v = get_values(card, cfg, store, bool(detect_grade(l.text)))
-                d = evaluate(l, card, v, cfg)
-                near = None if d else evaluate(l, card, v, loose)
-                if d or near:
-                    n_val += 1
-                if near:
-                    store.best(day, near.profit, f"{near.card['name']} voor €{l.price_eur:.0f} ({l.url})")
-                if not d and cfg.get("bid_alerts", True):
-                    b = bid_chance(l, card, v, cfg)
-                    if b:
-                        store.inc(day, "bids")
-                        log.info("BOD-KANS: %s waarde €%s", card["name"], b["market"])
-                        try:
-                            send_bid_chance(cfg, l, card, b)
-                        except Exception as e:
-                            log.error("Bod-kans melding mislukt: %s", e)
-            else:
-                d = evaluate_lot(l, cfg, store)
-            if d:
-                deals.append(d)
-                store.inc(day, "deals")
-                log.info("DEAL: %s", format_deal(d)[0])
-                try:
-                    send_deal(cfg, d)
-                except Exception as e:
-                    log.error("Melding mislukt: %s", e)
-        time.sleep(2)  # netjes blijven tegen Marktplaats
-    if first:
-        log.info("Eerste run: bestaande advertenties overgeslagen.")
-    store.inc(day, "new", n_new); store.inc(day, "identified", n_id); store.inc(day, "valued", n_val)
-    log.info("Run klaar: %d nieuw, %d herkend, %d met prijs, %d deals", n_new, n_id, n_val, len(deals))
-    # dagoverzicht 1x per dag na het ingestelde uur
+            nxt = start + bf_pages * limit
+            if len(listings) < bf_pages * limit or nxt >= max_off:
+                nxt = 0                                  # einde bereikt: opnieuw van voren
+            store.kv_set(f"cursor:{q}", nxt)
+            todo = [l for l in listings if l.id and store.needs_eval(l.id, l.price_eur)]
+            for l in todo:
+                store.mark(l.id)
+                n_old += 1
+                process_listing(l, cfg, store, day, counts, deals, old=True)
+            time.sleep(2)
+
+    store.inc(day, "new", counts["new"]); store.inc(day, "identified", counts["id"])
+    store.inc(day, "valued", counts["val"])
+    log.info("Run klaar: %d bekeken (%d oud), %d herkend, %d met prijs, %d deals",
+             counts["new"], n_old, counts["id"], counts["val"], len(deals))
     hour = int(cfg.get("daily_summary_hour", 21))
     if hour >= 0 and now.hour >= hour and not store.stats(day).get("summary_sent"):
         store.inc(day, "summary_sent")

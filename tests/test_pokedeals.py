@@ -74,19 +74,41 @@ def test_find_grade_shapes():
 
 def test_run_once_full_flow(tmp_path):
     store = pd.Store(tmp_path / "t.db")
+    cfg = {**CFG, "backfill_pages": 0, "daily_summary_hour": -1}
     old = [pd.parse_mp_listing(mp("old", "Moonbreon", 50000))]
     new = [pd.parse_mp_listing(mp("new", "Umbreon VMAX 215 alt art", 60000))] + old
+    n = len(cfg["searches"])
     sent = []
-    with mock.patch.object(pd, "fetch_marktplaats", side_effect=[old] * len(CFG["searches"]) + [new] * len(CFG["searches"])), \
+    with mock.patch.object(pd, "fetch_marktplaats", side_effect=[old] * n + [new] * n), \
          mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000, psa9=1300, psa10=2800)), \
          mock.patch.object(pd, "send_deal", side_effect=lambda c, d: sent.append(pd.format_deal(d)[0])), \
          mock.patch.object(pd.time, "sleep"):
-        assert pd.run_once(CFG, store) == []          # eerste run: niets melden
-        deals = pd.run_once(CFG, store)
-    assert len(deals) == 1 and deals[0].listing.id == "new"
-    assert len(sent) == 1 and "+€" in sent[0]
-    print(pd.format_deal(deals[0]))
+        first = pd.run_once(cfg, store)          # bestaande advertentie wordt nu ook bekeken
+        deals = pd.run_once(cfg, store)          # alleen de nieuwe, oude niet dubbel
+    assert [d.listing.id for d in first] == ["old"]
+    assert [d.listing.id for d in deals] == ["new"]
+    assert len(sent) == 2
 
+
+def test_backfill_and_price_drop(tmp_path):
+    store = pd.Store(tmp_path / "bf.db")
+    cfg = {**CFG, "searches": ["pokemon"], "mp_pages": 1, "mp_limit": 2, "backfill_pages": 1,
+           "backfill_max_offset": 6, "daily_summary_hour": -1}
+    calls = []
+    def fake_fetch(q, limit, pages, start=0):
+        calls.append(start)
+        if start == 2:
+            return [pd.parse_mp_listing(mp("o1", "Moonbreon", 60000)), pd.parse_mp_listing(mp("o2", "x", 100))]
+        return []
+    with mock.patch.object(pd, "fetch_marktplaats", side_effect=fake_fetch), \
+         mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000)), \
+         mock.patch.object(pd, "send_deal"), mock.patch.object(pd.time, "sleep"):
+        d1 = pd.run_once(cfg, store)
+    assert calls == [0, 2] and [d.listing.id for d in d1] == ["o1"]
+    assert d1[0].grading_note and "Oudere advertentie" in d1[0].grading_note
+    assert store.kv_get("cursor:pokemon") == "4"
+    # prijsverlaging -> opnieuw bekijken, gelijke prijs -> niet
+    assert not store.needs_eval("o1", 600.0) and store.needs_eval("o1", 500.0)
 
 def test_auto_identify(tmp_path):
     store = pd.Store(tmp_path / "a.db")
@@ -292,8 +314,8 @@ def test_bid_chance_and_stats(tmp_path):
          mock.patch.object(pd, "send_daily_summary", side_effect=lambda *a: sent.append("sum")), \
          mock.patch.object(pd.time, "sleep"):
         store.mark("dummy")
-        pd.run_once({**REAL_CFG, "daily_summary_hour": 0}, store)
-        pd.run_once({**REAL_CFG, "daily_summary_hour": 0}, store)
+        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0}, store)
+        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0}, store)
     day = pd.local_now().strftime("%Y-%m-%d")
     st = store.stats(day)
     assert st["new"] == 2 and st["identified"] == 2 and st["bids"] == 1
