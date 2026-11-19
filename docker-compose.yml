@@ -1,0 +1,11 @@
+services:
+  pokedeals:
+    build: .
+    restart: always
+    environment:
+      - POKEMONTCG_API_KEY=${POKEMONTCG_API_KEY:-}
+      - PPT_API_KEY=${PPT_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/data

@@ -1,0 +1,102 @@
+# ===== PokeDeals instellingen =====
+
+# Hoe vaak checken (seconden). 60 = elke minuut.
+interval_seconds: 60
+
+# Zoektermen op Marktplaats (nieuwste advertenties eerst).
+# Elke zoekterm = 1 verzoek per ronde. Houd het klein (2-4).
+searches:
+  - "pokemon psa"
+  - "pokemon kaart"
+  - "pokemon kaarten"
+
+# Telefoonmelding via de gratis ntfy-app (Android/iOS).
+# Kies een lange geheime naam, abonneer je in de app op precies deze naam.
+ntfy:
+  server: "https://ntfy.sh"
+  topic: "VERANDER-MIJ-pokedeals-x8f3k2q9"
+
+# API keys (optioneel maar aangeraden). Mag ook via env vars:
+# POKEMONTCG_API_KEY en PPT_API_KEY
+pokemontcg_api_key: ""
+ppt_api_key: ""          # pokemonpricetracker.com (voor PSA/eBay prijzen)
+usd_to_eur: 0.92         # omrekening voor eBay-prijzen in dollars
+
+# Wanneer is iets een deal?
+min_profit_eur: 15       # minimaal zoveel netto winst
+min_margin_pct: 20       # en minimaal zoveel % winst op je inkoop
+
+# Kosten (pas aan naar jouw situatie)
+costs:
+  buy_shipping_eur: 5.0        # verzendkosten Marktplaats naar jou
+  cardmarket_fee_pct: 5        # Cardmarket commissie bij verkoop raw
+  cardmarket_ship_eur: 2.0     # verzenden raw kaart
+  ebay_fee_pct: 13             # eBay fees bij verkoop graded
+  ebay_ship_eur: 8.0           # verzenden slab (verzekerd)
+  show_grading_option: false  # true = ook 'laten graden' winst tonen
+  grading_eur: 49.99           # PSA Europe Standard
+  grading_ship_eur: 15.0       # heen/terug naar PSA, per kaart
+  psa10_chance_pct: 35         # jouw gok kans op PSA 10 bij raw NM kaart
+
+# Automatische modus: herkent ook kaarten buiten je watchlist
+# via het kaartnummer in de titel (bv. "Pikachu 160/159").
+auto_mode: true
+
+# Foto's lezen met AI voor advertenties zonder kaartnummers,
+# bv. "pokemon kaarten verzameling". GRATIS via Google Gemini.
+# Gratis key: aistudio.google.com -> "Get API key" (of env var GEMINI_API_KEY)
+vision:
+  enabled: false
+  provider: "gemini"          # gratis. ("claude" kan ook, maar is betaald)
+  gemini_api_key: ""
+  model: "gemini-2.5-flash"   # check in AI Studio welke Flash-modellen gratis zijn
+  max_images: 3               # foto's per advertentie
+  max_per_day: 200            # blijf onder de gratis daglimiet
+  min_listing_price: 10       # goedkopere advertenties niet scannen
+  min_confidence: 0.75        # AI moet zo zeker zijn
+
+# Bij eerste start: bestaande advertenties niet melden (anders spam)
+skip_existing_on_first_run: true
+
+# ===== Watchlist: kaarten waar de bot op let =====
+# keywords: advertentie matcht als ÉÉN van deze zinnen in titel/omschrijving staat
+# exclude:  woorden die een match afkeuren
+# pokemontcg_id: id van pokemontcg.io (zoek op https://pokemontcg.io), geeft Cardmarket prijs
+# Handmatige waardes (EUR) overschrijven de API als je ze invult.
+# Japanse kaart? Zet language: "japanese" (prijzen via pokemonpricetracker, ppt_api_key nodig)
+watchlist:
+  - name: "Umbreon VMAX Alt Art (Evolving Skies)"
+    keywords: ["umbreon vmax 215", "moonbreon", "umbreon vmax alt", "215/203"]
+    exclude: ["proxy", "fake", "replica", "custom", "orica"]
+    pokemontcg_id: "swsh7-215"
+    ppt_search: "Umbreon VMAX 215"
+    raw_value_eur: null
+    psa9_value_eur: null
+    psa10_value_eur: null
+
+  - name: "Umbreon VMAX 095/067 (Japans, Eevee Heroes)"
+    keywords: ["umbreon vmax 095", "095/067"]
+    exclude: ["proxy", "fake", "custom"]
+    language: "japanese"
+    ppt_search: "Umbreon VMAX 095/067"
+    raw_value_eur: null
+    psa9_value_eur: null
+    psa10_value_eur: null
+
+  - name: "Charizard Base Set Holo"
+    keywords: ["charizard base set", "charizard 4/102", "glurak base"]
+    exclude: ["proxy", "fake", "replica", "custom", "celebrations", "25th"]
+    pokemontcg_id: "base1-4"
+    ppt_search: "Charizard Base Set 4/102"
+    raw_value_eur: null
+    psa9_value_eur: null
+    psa10_value_eur: null
+
+  - name: "Giratina V Alt Art (Lost Origin)"
+    keywords: ["giratina v alt", "giratina 186", "186/196"]
+    exclude: ["proxy", "fake", "custom", "vstar"]
+    pokemontcg_id: "swsh11-186"
+    ppt_search: "Giratina V 186"
+    raw_value_eur: null
+    psa9_value_eur: null
+    psa10_value_eur: null
