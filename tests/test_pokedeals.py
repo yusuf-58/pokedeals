@@ -6,7 +6,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pokedeals as pd  # noqa: E402
 
-CFG = pd.load_config(Path(__file__).resolve().parents[1] / "config.yaml")
+REAL_CFG = pd.load_config(Path(__file__).resolve().parents[1] / "config.yaml")
+# tests rekenen met vaste, lage drempels (los van jouw instellingen)
+CFG = {**REAL_CFG, "min_profit_eur": 15, "min_margin_pct": 20}
 
 
 def mp(item_id, title, cents, ptype="FIXED", desc=""):
@@ -186,3 +188,10 @@ def test_bot_message_with_buttons():
     names = [f["name"] for f in body["embeds"][0]["fields"]]
     assert any("Bericht voor verkoper" in n for n in names) and any("te koop voor" in n for n in names)
     print(json.dumps(body, ensure_ascii=False, indent=1)[:1500])
+
+
+def test_min_profit_150():
+    l = pd.parse_mp_listing(mp("1", "Moonbreon", 30000))           # €300
+    card = REAL_CFG["watchlist"][0]
+    assert pd.evaluate(l, card, pd.Values(raw=450), REAL_CFG) is None   # ~€120 winst: te weinig
+    assert pd.evaluate(l, card, pd.Values(raw=520), REAL_CFG)           # ~€187 winst: deal
