@@ -2,7 +2,7 @@ name: PokeDeals
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # elke 5 min (GitHub kan wat later starten)
+    - cron: "7,37 * * * *"  # reserve; de Cloudflare Worker start hem elke 5 min
   workflow_dispatch:         # handmatig starten via de Actions-tab
     inputs:
       test:

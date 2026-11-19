@@ -27,8 +27,34 @@ function cleanEmbed(e) {
   return out;
 }
 
+// Elke 5 min de GitHub-scan starten (Cloudflare Cron Trigger).
+// Nodig: secret GITHUB_TOKEN (fine-grained token met "Actions: Read and write").
+async function startScan(env) {
+  const repo = env.GH_REPO || "yusuf-58/pokedeals";
+  const r = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/pokedeals.yml/dispatches`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "pokedeals-worker",
+    },
+    body: JSON.stringify({ ref: "main" }),
+  });
+  console.log("scan gestart:", r.status, r.status === 204 ? "ok" : await r.text());
+  return r.status;
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(startScan(env));
+  },
+
   async fetch(request, env) {
+    const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === "/scan") {
+      const status = await startScan(env);
+      return new Response(status === 204 ? "Scan gestart ✅" : `Mislukt (${status}) - check GITHUB_TOKEN`);
+    }
     if (request.method !== "POST") return new Response("PokeDeals worker draait ✅");
 
     const sig = request.headers.get("X-Signature-Ed25519");
