@@ -56,6 +56,7 @@ costs:
   ebay_fee_pct: 13             # eBay fees bij verkoop graded
   ebay_ship_eur: 8.0           # verzenden slab (verzekerd)
   show_grading_option: false  # true = ook 'laten graden' winst tonen
+  sealed_ship_eur: 10.0       # verzenden sealed product (verzekerd)
   grading_eur: 49.99           # PSA Europe Standard
   grading_ship_eur: 15.0       # heen/terug naar PSA, per kaart
   psa10_chance_pct: 35         # jouw gok kans op PSA 10 bij raw NM kaart
@@ -123,3 +124,49 @@ watchlist:
     raw_value_eur: null
     psa9_value_eur: null
     psa10_value_eur: null
+
+  # ===== SEALED =====
+  # type: sealed + value_eur = wat het op Cardmarket echt waard is (zelf invullen,
+  # bv. laagste prijs van verkopers uit NL/DE). Zonder value_eur doet hij niks.
+  # Advertenties met "leeg", "geopend", "resealed" enz. worden overgeslagen.
+  - name: "Evolving Skies Booster Box"
+    type: sealed
+    keywords: ["evolving skies booster box", "evolving skies display", "evolving skies booster display"]
+    exclude: ["leeg", "empty", "geopend", "opened"]
+    value_eur: null
+
+  - name: "151 Booster Bundle / ETB"
+    type: sealed
+    keywords: ["151 elite trainer box", "151 etb", "151 booster bundle"]
+    exclude: ["leeg", "empty", "geopend", "opened"]
+    value_eur: null
+
+  - name: "Prismatic Evolutions ETB"
+    type: sealed
+    keywords: ["prismatic evolutions elite trainer box", "prismatic evolutions etb", "prismatic etb"]
+    exclude: ["leeg", "empty", "geopend", "opened", "pokemon center"]
+    value_eur: null
+
+  - name: "Prismatic Evolutions ETB (Pokemon Center)"
+    type: sealed
+    keywords: ["prismatic evolutions pokemon center", "prismatic pc etb", "prismatic pokemon center etb"]
+    exclude: ["leeg", "empty", "geopend", "opened"]
+    value_eur: null
+
+  - name: "Crown Zenith ETB"
+    type: sealed
+    keywords: ["crown zenith elite trainer box", "crown zenith etb"]
+    exclude: ["leeg", "empty", "geopend", "opened"]
+    value_eur: null
+
+  - name: "Japanse VSTAR Universe Booster Box"
+    type: sealed
+    keywords: ["vstar universe booster box", "vstar universe box", "vstar universe display"]
+    exclude: ["leeg", "empty", "geopend", "opened"]
+    value_eur: null
+
+  - name: "Japanse 151 Booster Box"
+    type: sealed
+    keywords: ["japanse 151 booster box", "151 japanese booster box", "pokemon card 151 booster box", "151 box jp"]
+    exclude: ["leeg", "empty", "geopend", "opened"]
+    value_eur: null

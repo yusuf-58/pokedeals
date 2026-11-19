@@ -195,3 +195,17 @@ def test_min_profit_150():
     card = REAL_CFG["watchlist"][0]
     assert pd.evaluate(l, card, pd.Values(raw=450), REAL_CFG) is None   # ~€120 winst: te weinig
     assert pd.evaluate(l, card, pd.Values(raw=520), REAL_CFG)           # ~€187 winst: deal
+
+
+def test_sealed():
+    card = {"name": "ES Booster Box", "type": "sealed", "keywords": ["evolving skies booster box"],
+            "exclude": [], "value_eur": 900}
+    v = pd.get_values(card, CFG, None)
+    l = pd.parse_mp_listing(mp("s", "Evolving Skies Booster Box sealed", 60000))
+    d = pd.evaluate(l, card, v, REAL_CFG)
+    assert d and d.kind == "sealed" and d.profit >= 150
+    l2 = pd.parse_mp_listing(mp("s2", "Evolving Skies Booster Box leeg", 10000))
+    assert pd.evaluate(l2, card, v, REAL_CFG) is None
+    card["value_eur"] = None
+    assert pd.evaluate(l, card, pd.get_values(card, CFG, None), REAL_CFG) is None
+    assert pd.match_card(l, REAL_CFG["watchlist"])["type"] == "sealed"

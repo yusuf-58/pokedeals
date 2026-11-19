@@ -169,6 +169,9 @@ def match_card(listing: Listing, watchlist: list[dict]) -> dict | None:
     return None
 
 
+SEALED_BAD = ("leeg", "lege ", "empty", "geopend", "opened", "zonder booster", "alleen doos",
+              "alleen de doos", "resealed", "gewogen", "weighed", "replica", "fake")
+
 JP_RE = re.compile(r"\b(japans|japanse|japanese|japan|jpn|jp|jap)\b", re.I)
 
 
@@ -494,6 +497,8 @@ def _find_grade(obj, grade: str):
 def get_values(card: dict, cfg: dict, store: Store, want_graded: bool = False) -> Values:
     """Raw: Cardmarket (pokemontcg.io, zolang die werkt) anders pokemonpricetracker.
     Graded: eBay-verkopen via pokemonpricetracker. Handmatige waardes winnen."""
+    if card.get("type") == "sealed":
+        return Values(raw=_num(card.get("value_eur")), sources=["handmatig (sealed)"])
     lang = card.get("language") or "english"
     v = Values()
     key = "val:" + (card.get("pokemontcg_id") or card["name"])
@@ -533,8 +538,20 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
         return None
     c = cfg["costs"]
     buy = listing.price_eur + c["buy_shipping_eur"]
-    grade = detect_grade(listing.text)
     note = None
+    if card.get("type") == "sealed":
+        if not v.raw:
+            return None
+        if any(w in listing.text for w in SEALED_BAD):
+            return None
+        sell = v.raw * (1 - c["cardmarket_fee_pct"] / 100) - c.get("sealed_ship_eur", 10)
+        profit = sell - buy
+        margin = profit / buy * 100 if buy else 0
+        if profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]:
+            return None
+        return Deal(listing, card, "sealed", None, round(buy, 2), round(sell, 2),
+                    round(profit, 2), round(margin, 1), "📦 Sealed: check of de seal echt intact is!", round(v.raw, 2))
+    grade = detect_grade(listing.text)
 
     if grade:
         target = {"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade)
@@ -566,7 +583,7 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
 # ---------------------------------------------------------------- melding
 def format_deal(d: Deal) -> tuple[str, str]:
     l = d.listing
-    label = d.grade or ("📷 AI" if d.kind == "lot" else "Raw")
+    label = d.grade or {"lot": "📷 AI", "sealed": "Sealed"}.get(d.kind, "Raw")
     bid = " (bieden)" if l.price_type != "FIXED" else ""
     title = f"💰 +€{d.profit:.0f} | {d.card['name']} ({label})"
     lines = [
@@ -607,7 +624,7 @@ def deal_embed(d: Deal, cfg: dict) -> dict:
     c = cfg["costs"]
     offer = suggest_offer(d, cfg)
     profit_offer = d.sell_value - offer - c["buy_shipping_eur"]
-    label = d.grade or ("📷 AI-herkend" if d.kind == "lot" else "Raw")
+    label = d.grade or {"lot": "📷 AI-herkend", "sealed": "📦 Sealed"}.get(d.kind, "Raw")
     bid = " (bieden)" if l.price_type != "FIXED" else ""
     fields = [
         {"name": "💶 Vraagprijs", "value": f"€{l.price_eur:.2f}{bid}", "inline": True},
