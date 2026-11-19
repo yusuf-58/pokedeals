@@ -8,6 +8,24 @@ Checkt Marktplaats elke minuut op Pokémon-kaarten uit je watchlist, vergelijkt 
 3. GitHub repo → Settings → Secrets → Actions → secret `DISCORD_WEBHOOK` = die URL.
 4. Test: Actions → PokeDeals → Run workflow → vink **Alleen testbericht sturen** aan.
 
+## 1B. Discord-bot met knoppen (Claimen / Skippen)
+**Bot maken**
+1. discord.com/developers/applications → **New Application** → "PokeDeals".
+2. Tab **Bot** → **Reset Token** → kopieer → GitHub secret `DISCORD_BOT_TOKEN`.
+3. Tab **General Information** → kopieer **Public Key** (heb je zo nodig).
+4. Tab **OAuth2 → URL Generator** → vink `bot` aan → rechten: View Channels, Send Messages, Embed Links, Mention Everyone → open de link onderaan → kies je server.
+5. Discord: Instellingen → Geavanceerd → **Ontwikkelaarsmodus** aan → rechtsklik je kanaal → **Kanaal-ID kopiëren** → GitHub secret `DISCORD_CHANNEL_ID`.
+
+**Knoppen laten werken (Cloudflare, gratis)**
+1. dash.cloudflare.com → gratis account.
+2. **Workers & Pages → Create → Worker** → naam `pokedeals` → **Deploy**.
+3. **Edit code** → alles vervangen door `discord-worker/worker.js` → **Deploy**.
+4. Worker → **Settings → Variables and Secrets → Add** → naam `DISCORD_PUBLIC_KEY`, waarde = Public Key uit stap 3 hierboven → **Deploy**.
+5. Kopieer de worker-URL (`https://pokedeals.<jouwnaam>.workers.dev`).
+6. Developer Portal → **General Information → Interactions Endpoint URL** → plak URL → **Save Changes** (moet groen opslaan).
+
+**Testen:** Actions → PokeDeals → Run workflow → vink **Alleen testbericht sturen** aan → je krijgt een testdeal met knoppen.
+
 ## 2. API keys (gratis)
 - **pokemonpricetracker.com** → gratis API key = hoofdbron (raw + PSA 9/10, Engels + Japans). Gratis = 100 credits/dag; prijzen worden 12 uur onthouden.
 - pokemontcg.io is gestopt met nieuwe keys; de bot gebruikt hem zonder key zolang hij werkt (extra Cardmarket-prijzen), anders automatisch pokemonpricetracker.

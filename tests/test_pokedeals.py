@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from unittest import mock
@@ -76,7 +77,7 @@ def test_run_once_full_flow(tmp_path):
     sent = []
     with mock.patch.object(pd, "fetch_marktplaats", side_effect=[old] * 3 + [new] * 3), \
          mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000, psa9=1300, psa10=2800)), \
-         mock.patch.object(pd, "notify", side_effect=lambda *a, **k: sent.append(a[1])), \
+         mock.patch.object(pd, "send_deal", side_effect=lambda c, d: sent.append(pd.format_deal(d)[0])), \
          mock.patch.object(pd.time, "sleep"):
         assert pd.run_once(CFG, store) == []          # eerste run: niets melden
         deals = pd.run_once(CFG, store)
@@ -166,3 +167,22 @@ def test_discord_notify():
     assert p.call_count == 1  # ntfy staat uit
     body = p.call_args.kwargs["json"]
     assert body["embeds"][0]["url"] == "https://mp/x" and body["embeds"][0]["image"]["url"] == "https://img"
+
+
+def test_bot_message_with_buttons():
+    d = pd.example_deal()
+    assert pd.suggest_offer(d, CFG) == 480          # bieden: 80% van 600
+    d2 = pd.Deal(pd.Listing("x", "t", "", 47.0, "FIXED", "u"), {"name": "n"}, "raw", None, 52, 80, 28, 50)
+    assert pd.suggest_offer(d2, CFG) == 42          # vast: 90% van 47
+    cfg = {**CFG, "discord": {**CFG["discord"], "bot_token": "T", "channel_id": "123"}}
+    resp = mock.Mock(); resp.raise_for_status = lambda: None
+    with mock.patch.object(pd.requests, "post", return_value=resp) as p:
+        pd.send_deal(cfg, d)
+    url = p.call_args[0][0]; body = p.call_args.kwargs["json"]
+    assert url.endswith("/channels/123/messages")
+    assert p.call_args.kwargs["headers"]["Authorization"] == "Bot T"
+    ids = [c.get("custom_id") for c in body["components"][0]["components"]]
+    assert ids == ["claim", "skip", None]
+    names = [f["name"] for f in body["embeds"][0]["fields"]]
+    assert any("Bericht voor verkoper" in n for n in names) and any("te koop voor" in n for n in names)
+    print(json.dumps(body, ensure_ascii=False, indent=1)[:1500])

@@ -16,8 +16,16 @@ searches:
 
 # Meldingen via Discord (aanrader). Webhook-URL als GitHub secret DISCORD_WEBHOOK,
 # niet hier invullen (je repo is openbaar).
+# Met knoppen (Claimen/Skippen): GitHub secrets DISCORD_BOT_TOKEN + DISCORD_CHANNEL_ID
+# Zonder bot: alleen DISCORD_WEBHOOK (geen knoppen).
 discord:
   webhook_url: ""
+
+# Onderhandelen: geschat bod = % van vraagprijs
+negotiation:
+  your_name: "Yusuf"
+  bid_pct: 80      # bij "bieden"-advertenties
+  fixed_pct: 90    # bij vaste prijs
 
 # (Optioneel) Telefoonmelding via de gratis ntfy-app (Android/iOS).
 # Kies een lange geheime naam, abonneer je in de app op precies deze naam.

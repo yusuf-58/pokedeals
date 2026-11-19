@@ -69,6 +69,7 @@ class Deal:
     profit: float
     margin_pct: float
     grading_note: str | None = None
+    market: float | None = None    # marktwaarde (bruto)
 
 
 # ---------------------------------------------------------------- storage
@@ -388,7 +389,7 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
     if not res or res.get("looks_fake"):
         return None
     c = cfg["costs"]
-    total_sell, found, unknown = 0.0, [], 0
+    total_sell, total_market, found, unknown = 0.0, 0.0, [], 0
     for card in res.get("cards", []):
         if (card.get("confidence") or 0) < vc.get("min_confidence", 0.75):
             unknown += 1
@@ -414,6 +415,7 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
                 continue
             sell = gv * (1 - c["ebay_fee_pct"] / 100) - c["ebay_ship_eur"]
             found.append(f"{card['name']} {grade} €{gv:.0f}")
+            total_market += gv
         elif grade:
             unknown += 1
             continue
@@ -424,6 +426,7 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
             sell = val.raw * (1 - c["cardmarket_fee_pct"] / 100) - c["cardmarket_ship_eur"]
             flag = "🇯🇵 " if lang == "jp" else ""
             found.append(f"{flag}{card['name']} €{val.raw:.0f}")
+            total_market += val.raw
         total_sell += max(sell, 0)
     if not found:
         return None
@@ -437,7 +440,7 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
         note += f"\n+{unknown} kaart(en) niet meegeteld (onzeker) = mogelijk extra winst"
     lot = {"name": f"Lot van {len(found)} kaart(en)"}
     return Deal(listing, lot, "lot", None, round(buy, 2), round(total_sell, 2),
-                round(profit, 2), round(margin, 1), note)
+                round(profit, 2), round(margin, 1), note, round(total_market, 2))
 
 
 # ---------------------------------------------------------------- prijzen
@@ -537,11 +540,13 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
         target = {"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade)
         if not target:
             return None  # geen betrouwbare prijs voor dit cijfer/bedrijf
+        market = target
         sell = target * (1 - c["ebay_fee_pct"] / 100) - c["ebay_ship_eur"]
         kind = "graded"
     else:
         if not v.raw:
             return None
+        market = v.raw
         sell = v.raw * (1 - c["cardmarket_fee_pct"] / 100) - c["cardmarket_ship_eur"]
         kind = "raw"
         if c.get("show_grading_option") and v.psa10 and v.psa9:
@@ -555,7 +560,7 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
     if profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]:
         return None
     return Deal(listing, card, kind, grade, round(buy, 2), round(sell, 2),
-                round(profit, 2), round(margin, 1), note)
+                round(profit, 2), round(margin, 1), note, round(market, 2))
 
 
 # ---------------------------------------------------------------- melding
@@ -575,6 +580,93 @@ def format_deal(d: Deal) -> tuple[str, str]:
         lines.append("⚠️ AI-herkenning: check foto's zelf!")
     lines.append(f"Advertentie: {l.title[:80]}")
     return title, "\n".join(lines)
+
+
+def _round_down(x: float) -> int:
+    step = 5 if x >= 50 else 1
+    return int(x // step * step)
+
+
+def suggest_offer(d: Deal, cfg: dict) -> int:
+    """Realistisch bod: bieden-advertenties ~80%, vaste prijs ~90% van vraagprijs."""
+    neg = cfg.get("negotiation") or {}
+    pct = neg.get("bid_pct", 80) if d.listing.price_type != "FIXED" else neg.get("fixed_pct", 90)
+    return max(1, _round_down(d.listing.price_eur * pct / 100))
+
+
+def seller_message(d: Deal, offer: int, cfg: dict) -> str:
+    naam = (cfg.get("negotiation") or {}).get("your_name", "Yusuf")
+    kaart = d.listing.title[:60]
+    return (f"Hoi! Ik heb interesse in je {kaart}. Is hij nog beschikbaar? "
+            f"Ik zou hem graag voor €{offer} willen kopen, ik kan snel betalen "
+            f"en hem ophalen of laten verzenden. Laat maar weten! Groetjes, {naam}")
+
+
+def deal_embed(d: Deal, cfg: dict) -> dict:
+    l = d.listing
+    c = cfg["costs"]
+    offer = suggest_offer(d, cfg)
+    profit_offer = d.sell_value - offer - c["buy_shipping_eur"]
+    label = d.grade or ("📷 AI-herkend" if d.kind == "lot" else "Raw")
+    bid = " (bieden)" if l.price_type != "FIXED" else ""
+    fields = [
+        {"name": "💶 Vraagprijs", "value": f"€{l.price_eur:.2f}{bid}", "inline": True},
+        {"name": "📈 Marktwaarde", "value": f"€{(d.market or 0):.2f}", "inline": True},
+        {"name": "🤝 Waarschijnlijk te koop voor", "value": f"~€{offer}", "inline": True},
+        {"name": "💰 Winst bij vraagprijs", "value": f"€{d.profit:.2f} ({d.margin_pct:.0f}%)", "inline": True},
+        {"name": "💰 Winst bij bod", "value": f"€{profit_offer:.2f}", "inline": True},
+        {"name": "🏷️ Type", "value": label, "inline": True},
+    ]
+    if d.grading_note:
+        fields.append({"name": "ℹ️ Info", "value": d.grading_note[:1000], "inline": False})
+    fields.append({"name": "✉️ Bericht voor verkoper", "value": f"```{seller_message(d, offer, cfg)}```", "inline": False})
+    desc = f"**{l.title[:200]}**" + (f"\n📍 {l.city}" if l.city else "")
+    if d.kind == "lot":
+        desc += "\n⚠️ AI-herkenning: check de foto's zelf!"
+    e = {"title": f"{d.card['name']}"[:256], "url": l.url, "description": desc,
+         "color": 0x2ECC71, "fields": fields,
+         "footer": {"text": "Verkoopwaarde is na fees en verzendkosten"}}
+    if l.image:
+        e["image"] = {"url": l.image}
+    return e
+
+
+def deal_buttons(url: str) -> list:
+    return [{"type": 1, "components": [
+        {"type": 2, "style": 3, "label": "Claimen", "emoji": {"name": "✅"}, "custom_id": "claim"},
+        {"type": 2, "style": 4, "label": "Skippen", "emoji": {"name": "⏭️"}, "custom_id": "skip"},
+        {"type": 2, "style": 5, "label": "Open advertentie", "url": url},
+    ]}]
+
+
+def send_deal_bot(token: str, channel: str, d: Deal, cfg: dict):
+    r = requests.post(f"https://discord.com/api/v10/channels/{channel}/messages",
+                      headers={"Authorization": f"Bot {token}"}, timeout=15,
+                      json={"content": f"@here 💰 **Deal: +€{d.profit:.0f}**",
+                            "embeds": [deal_embed(d, cfg)],
+                            "components": deal_buttons(d.listing.url),
+                            "allowed_mentions": {"parse": ["everyone"]}})
+    r.raise_for_status()
+
+
+def send_deal(cfg: dict, d: Deal):
+    """Deal versturen: Discord-bot met knoppen, anders webhook/ntfy."""
+    token = os.getenv("DISCORD_BOT_TOKEN") or (cfg.get("discord") or {}).get("bot_token")
+    channel = os.getenv("DISCORD_CHANNEL_ID") or (cfg.get("discord") or {}).get("channel_id")
+    if token and channel:
+        send_deal_bot(token, str(channel), d, cfg)
+        return
+    title, msg = format_deal(d)
+    offer = suggest_offer(d, cfg)
+    msg += f"\nWaarschijnlijk te koop voor: ~€{offer}\n\nBericht:\n{seller_message(d, offer, cfg)}"
+    notify(cfg, title, msg, click=d.listing.url, image=d.listing.image)
+
+
+def example_deal() -> Deal:
+    l = Listing("test", "TEST - Umbreon VMAX 215/203 Moonbreon NM", "", 600.0, "FAST_BID",
+                "https://www.marktplaats.nl", "Haarlem")
+    return Deal(l, {"name": "🧪 Testdeal: Umbreon VMAX Alt Art"}, "raw", None,
+                605.0, 948.0, 343.0, 56.7, None, 1000.0)
 
 
 def notify_discord(url: str, title: str, message: str, click: str | None = None,
@@ -641,10 +733,9 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
                 d = evaluate_lot(l, cfg, store)
             if d:
                 deals.append(d)
-                title, msg = format_deal(d)
-                log.info("DEAL: %s", title)
+                log.info("DEAL: %s", format_deal(d)[0])
                 try:
-                    notify(cfg, title, msg, click=l.url, image=l.image)
+                    send_deal(cfg, d)
                 except Exception as e:
                     log.error("Melding mislukt: %s", e)
         time.sleep(2)  # netjes blijven tegen Marktplaats
@@ -669,8 +760,8 @@ def main():
     cfg = load_config(Path(a.config))
 
     if a.test_notify:
-        notify(cfg, "✅ PokeDeals werkt", "Je ontvangt hier je deals. 🃏💰", priority=3)
-        print("Testmelding verstuurd.")
+        send_deal(cfg, example_deal())
+        print("Testdeal verstuurd.")
         return
 
     store = Store(Path(a.db))
