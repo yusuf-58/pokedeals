@@ -14,7 +14,7 @@ searches:
 # Kies een lange geheime naam, abonneer je in de app op precies deze naam.
 ntfy:
   server: "https://ntfy.sh"
-  topic: "VERANDER-MIJ-pokedeals-x8f3k2q9"
+  topic: "yusuf-pokemondeals"
 
 # API keys (optioneel maar aangeraden). Mag ook via env vars:
 # POKEMONTCG_API_KEY en PPT_API_KEY
