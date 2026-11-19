@@ -14,10 +14,16 @@ searches:
   - "pokemon kaart"
   - "pokemon kaarten"
 
-# Telefoonmelding via de gratis ntfy-app (Android/iOS).
+# Meldingen via Discord (aanrader). Webhook-URL als GitHub secret DISCORD_WEBHOOK,
+# niet hier invullen (je repo is openbaar).
+discord:
+  webhook_url: ""
+
+# (Optioneel) Telefoonmelding via de gratis ntfy-app (Android/iOS).
 # Kies een lange geheime naam, abonneer je in de app op precies deze naam.
 # Bij GitHub: zet hem als secret NTFY_TOPIC (dan blijft hij geheim).
 ntfy:
+  enabled: false
   server: "https://ntfy.sh"
   topic: "yusuf-pokemondeals"
 

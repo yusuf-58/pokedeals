@@ -156,3 +156,13 @@ def test_fallback_when_pokemontcg_dead(tmp_path):
          mock.patch.object(pd, "ppt_card", return_value=ppt):
         c = pd.auto_identify(l, CFG, store)
     assert c and c["language"] == "english"
+
+
+def test_discord_notify():
+    cfg = {**CFG, "discord": {"webhook_url": "https://discord.com/api/webhooks/x"}}
+    resp = mock.Mock(); resp.raise_for_status = lambda: None
+    with mock.patch.object(pd.requests, "post", return_value=resp) as p:
+        pd.notify(cfg, "titel", "tekst", click="https://mp/x", image="https://img")
+    assert p.call_count == 1  # ntfy staat uit
+    body = p.call_args.kwargs["json"]
+    assert body["embeds"][0]["url"] == "https://mp/x" and body["embeds"][0]["image"]["url"] == "https://img"

@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "*/5 * * * *"   # elke 5 min (GitHub kan wat later starten)
   workflow_dispatch:         # handmatig starten via de Actions-tab
+    inputs:
+      test:
+        description: "Alleen testbericht sturen"
+        type: boolean
+        default: false
 
 concurrency:
   group: pokedeals
@@ -33,11 +38,17 @@ jobs:
 
       - name: Scannen
         env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           POKEMONTCG_API_KEY: ${{ secrets.POKEMONTCG_API_KEY }}
           PPT_API_KEY: ${{ secrets.PPT_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python pokedeals.py --once
+        run: |
+          if [ "${{ inputs.test }}" = "true" ]; then
+            python pokedeals.py --test-notify
+          else
+            python pokedeals.py --once
+          fi
 
       - name: Database opslaan
         if: always()

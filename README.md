@@ -2,11 +2,11 @@
 
 Checkt Marktplaats elke minuut op Pokémon-kaarten uit je watchlist, vergelijkt met Cardmarket (raw) en eBay-verkopen (PSA 9/10), en stuurt een pushmelding naar je telefoon als de winst groot genoeg is.
 
-## 1. Telefoonmelding (5 min)
-1. Installeer de app **ntfy** (Android/iOS, gratis).
-2. Bedenk een geheime topicnaam, bv. `yusuf-pokedeals-8fk2q`.
-3. In de app: **+** → abonneer op die naam.
-4. Zet dezelfde naam in `config.yaml` bij `ntfy.topic`.
+## 1. Meldingen via Discord
+1. Discord → **+** (links) → **Zelf maken** → server "PokeDeals".
+2. Rechtsklik kanaal **#algemeen** → **Kanaal bewerken** → **Integraties** → **Webhooks** → **Nieuwe webhook** → **Webhook-URL kopiëren**.
+3. GitHub repo → Settings → Secrets → Actions → secret `DISCORD_WEBHOOK` = die URL.
+4. Test: Actions → PokeDeals → Run workflow → vink **Alleen testbericht sturen** aan.
 
 ## 2. API keys (gratis)
 - **pokemonpricetracker.com** → gratis API key = hoofdbron (raw + PSA 9/10, Engels + Japans). Gratis = 100 credits/dag; prijzen worden 12 uur onthouden.
@@ -29,7 +29,7 @@ Draait elke ~5 min in de cloud, ook als je pc uit is.
 1. Maak een account op github.com → **New repository** → kies **Public** (dan is het onbeperkt gratis).
 2. Upload alle bestanden uit deze map (ook de map `.github`).
 3. Repo → **Settings → Secrets and variables → Actions → New secret**. Voeg toe:
-   - `NTFY_TOPIC` (verplicht)
+   - `DISCORD_WEBHOOK` (verplicht)
    - `PPT_API_KEY`, `POKEMONTCG_API_KEY`, `GEMINI_API_KEY` (optioneel)
 4. Tab **Actions** → PokeDeals → **Run workflow** om te testen.
 

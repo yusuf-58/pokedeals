@@ -577,18 +577,43 @@ def format_deal(d: Deal) -> tuple[str, str]:
     return title, "\n".join(lines)
 
 
+def notify_discord(url: str, title: str, message: str, click: str | None = None,
+                   image: str | None = None, color: int = 0x2ECC71):
+    embed = {"title": title[:256], "description": message[:4000], "color": color}
+    if click:
+        embed["url"] = click
+    if image:
+        embed["image"] = {"url": image}
+    r = requests.post(url, timeout=15, json={
+        "username": "PokeDeals", "embeds": [embed],
+        "content": "@here" if color == 0x2ECC71 else None})
+    r.raise_for_status()
+
+
 def notify(cfg: dict, title: str, message: str, click: str | None = None,
            image: str | None = None, priority: int = 4):
-    n = cfg["ntfy"]
-    payload = {"topic": os.getenv("NTFY_TOPIC") or n["topic"], "title": title, "message": message,
-               "priority": priority, "tags": ["moneybag"]}
-    if click:
-        payload["click"] = click
-        payload["actions"] = [{"action": "view", "label": "Open advertentie", "url": click}]
-    if image:
-        payload["attach"] = image
-    r = requests.post(n["server"].rstrip("/"), json=payload, timeout=15)
-    r.raise_for_status()
+    """Stuurt naar Discord (webhook) en/of ntfy, wat ingesteld is."""
+    sent = False
+    dc = os.getenv("DISCORD_WEBHOOK") or (cfg.get("discord") or {}).get("webhook_url")
+    if dc:
+        notify_discord(dc, title, message, click, image,
+                       color=0x2ECC71 if priority >= 4 else 0x3498DB)
+        sent = True
+    n = cfg.get("ntfy") or {}
+    topic = os.getenv("NTFY_TOPIC") or n.get("topic")
+    if topic and n.get("enabled", True) and "VERANDER-MIJ" not in topic:
+        payload = {"topic": topic, "title": title, "message": message,
+                   "priority": priority, "tags": ["moneybag"]}
+        if click:
+            payload["click"] = click
+            payload["actions"] = [{"action": "view", "label": "Open advertentie", "url": click}]
+        if image:
+            payload["attach"] = image
+        r = requests.post(n.get("server", "https://ntfy.sh").rstrip("/"), json=payload, timeout=15)
+        r.raise_for_status()
+        sent = True
+    if not sent:
+        log.warning("Geen melding verstuurd: stel DISCORD_WEBHOOK of NTFY_TOPIC in")
 
 
 # ---------------------------------------------------------------- loop
@@ -644,7 +669,7 @@ def main():
     cfg = load_config(Path(a.config))
 
     if a.test_notify:
-        notify(cfg, "✅ PokeDeals werkt", "Je ontvangt hier je deals.", priority=3)
+        notify(cfg, "✅ PokeDeals werkt", "Je ontvangt hier je deals. 🃏💰", priority=3)
         print("Testmelding verstuurd.")
         return
 
