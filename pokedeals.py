@@ -646,7 +646,11 @@ def send_deal_bot(token: str, channel: str, d: Deal, cfg: dict):
                             "embeds": [deal_embed(d, cfg)],
                             "components": deal_buttons(d.listing.url),
                             "allowed_mentions": {"parse": ["everyone"]}})
-    r.raise_for_status()
+    if not r.ok:
+        hints = {401: "token klopt niet (opnieuw resetten + secret updaten)",
+                 403: "bot zit niet in de server of mag niet in dit kanaal schrijven",
+                 404: "kanaal-ID klopt niet"}
+        raise RuntimeError(f"Discord {r.status_code}: {hints.get(r.status_code, '')} | {r.text[:200]}")
 
 
 def send_deal(cfg: dict, d: Deal):
@@ -654,8 +658,11 @@ def send_deal(cfg: dict, d: Deal):
     token = os.getenv("DISCORD_BOT_TOKEN") or (cfg.get("discord") or {}).get("bot_token")
     channel = os.getenv("DISCORD_CHANNEL_ID") or (cfg.get("discord") or {}).get("channel_id")
     if token and channel:
-        send_deal_bot(token, str(channel), d, cfg)
-        return
+        try:
+            send_deal_bot(token, str(channel), d, cfg)
+            return
+        except Exception as e:
+            log.error("Bot-bericht mislukt: %s -> val terug op webhook", e)
     title, msg = format_deal(d)
     offer = suggest_offer(d, cfg)
     msg += f"\nWaarschijnlijk te koop voor: ~€{offer}\n\nBericht:\n{seller_message(d, offer, cfg)}"
