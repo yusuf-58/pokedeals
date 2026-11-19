@@ -5,7 +5,8 @@ interval_seconds: 60
 
 # Aantal nieuwste advertenties per zoekterm per ronde
 # (bij GitHub Actions elke 5-10 min: 50 zodat je niks mist)
-mp_limit: 50
+mp_limit: 100
+mp_pages: 2              # pagina's per zoekterm (voorbij de betaalde dagtoppers)
 
 # Zoektermen op Marktplaats (nieuwste advertenties eerst).
 # Elke zoekterm = 1 verzoek per ronde. Houd het klein (2-4).
@@ -69,7 +70,7 @@ costs:
 auto_mode: true
 # Ook advertenties ZONDER kaartnummer herkennen op titel (kost API-credits)
 title_lookup_min_price: 15   # goedkopere advertenties niet opzoeken
-ppt_daily_budget: 90         # max opzoekingen per dag (gratis = 100)
+ppt_daily_budget: 30         # max opzoekingen per dag (gratis tegoed = 100 credits, ~3 per opzoeking)
 
 # Foto's lezen met AI voor advertenties zonder kaartnummers,
 # bv. "pokemon kaarten verzameling". GRATIS via Google Gemini.

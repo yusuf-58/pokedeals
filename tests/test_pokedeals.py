@@ -299,3 +299,22 @@ def test_bid_chance_and_stats(tmp_path):
     assert st["new"] == 2 and st["identified"] == 2 and st["bids"] == 1
     assert sent.count("bid") == 1 and sent.count("sum") == 1                 # overzicht maar 1x
     assert store.best(day)[0] > 0
+
+
+def test_fetch_pages_past_dagtoppers():
+    page1 = {"listings": [{"itemId": f"d{i}", "title": "x", "priorityProduct": "DAGTOPPER"} for i in range(100)]}
+    page2 = {"listings": [{"itemId": f"n{i}", "title": "y", "priorityProduct": "NONE"} for i in range(30)]}
+    r1 = mock.Mock(); r1.raise_for_status = lambda: None; r1.json = lambda: page1
+    r2 = mock.Mock(); r2.raise_for_status = lambda: None; r2.json = lambda: page2
+    with mock.patch.object(pd.requests, "get", side_effect=[r1, r2]) as g, mock.patch.object(pd.time, "sleep"):
+        out = pd.fetch_marktplaats("pokemon", 100, 2)
+    assert len(out) == 130 and g.call_args_list[1].kwargs["params"]["offset"] == 100
+
+
+def test_ppt_429_stops_for_day(tmp_path):
+    store = pd.Store(tmp_path / "r.db")
+    cfg = {**CFG, "ppt_api_key": "x"}
+    r = mock.Mock(); r.status_code = 429
+    with mock.patch.object(pd.requests, "get", return_value=r) as g:
+        pd.ppt_card("a", cfg, store, "english"); pd.ppt_card("b", cfg, store, "english")
+    assert g.call_count == 1

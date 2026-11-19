@@ -163,20 +163,30 @@ def parse_mp_listing(raw: dict) -> Listing:
     )
 
 
-def fetch_marktplaats(query: str, limit: int = 30) -> list[Listing]:
-    params = {"query": query, "limit": limit, "offset": 0,
-              "sortBy": "SORT_INDEX", "sortOrder": "DECREASING",
-              "viewOptions": "list-view"}
-    r = requests.get(MP_SEARCH, params=params, timeout=20,
-                     headers={"User-Agent": UA, "Accept": "application/json"})
-    r.raise_for_status()
-    raw = r.json().get("listings", [])
+def fetch_marktplaats(query: str, limit: int = 100, pages: int = 2) -> list[Listing]:
+    """Nieuwste advertenties. Dagtoppers (betaald, staan altijd bovenaan) tellen niet
+    mee als 'nieuw', dus we bladeren door tot voorbij de dagtoppers."""
+    out, n_prio = [], 0
+    for page in range(pages):
+        params = {"query": query, "limit": limit, "offset": page * limit,
+                  "sortBy": "SORT_INDEX", "sortOrder": "DECREASING",
+                  "viewOptions": "list-view"}
+        r = requests.get(MP_SEARCH, params=params, timeout=20,
+                         headers={"User-Agent": UA, "Accept": "application/json"})
+        r.raise_for_status()
+        raw = r.json().get("listings", [])
+        for x in raw:
+            if (x.get("priorityProduct") or "NONE") != "NONE":
+                n_prio += 1
+        out += [parse_mp_listing(x) for x in raw]
+        if len(raw) < limit:
+            break
+        if page + 1 < pages:
+            time.sleep(1)
     if os.getenv("POKEDEALS_DEBUG"):
-        for x in raw[:4]:
-            log.info("DEBUG %s | %s | %s | prio=%s | %s", query, x.get("itemId"), x.get("date"),
-                     x.get("priorityProduct"), (x.get("title") or "")[:40])
-        log.info("DEBUG %s: %d resultaten, keys=%s", query, len(raw), sorted((raw[0] if raw else {}).keys())[:30])
-    return [parse_mp_listing(x) for x in raw]
+        normal = [x for x in out if x.title]
+        log.info("DEBUG %s: %d resultaten, %d dagtoppers", query, len(out), n_prio)
+    return out
 
 
 # ---------------------------------------------------------------- matching
@@ -234,6 +244,10 @@ def ppt_card(search: str, cfg: dict, store: Store, language: str) -> dict | None
                          params={"search": search, "limit": 1, "language": language,
                                  "includeEbay": "true"},
                          headers={"Authorization": f"Bearer {api}"}, timeout=25)
+        if r.status_code == 429:
+            store.cache_put(f"pptbudget:{day}", 10**6)   # tegoed op: vandaag niet meer proberen
+            log.warning("pokemonpricetracker: dagtegoed op (429)")
+            return None
         r.raise_for_status()
         data = r.json().get("data")
         card = (data[0] if isinstance(data, list) and data else data) or {}
@@ -961,7 +975,7 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
     n_new = n_id = n_val = 0
     for q in cfg["searches"]:
         try:
-            listings = fetch_marktplaats(q, int(cfg.get("mp_limit", 30)))
+            listings = fetch_marktplaats(q, int(cfg.get("mp_limit", 100)), int(cfg.get("mp_pages", 2)))
         except Exception as e:
             log.warning("Marktplaats fout (%s): %s", q, e)
             continue
