@@ -456,3 +456,20 @@ def test_reported_false_matches():
     card = {"name": "x", "auto": True}
     l2 = pd.parse_mp_listing(mp("h", "Groudon", 5200))
     assert pd.evaluate(l2, card, pd.Values(raw=2760), REAL_CFG) is None
+
+
+def test_slab_share_in_batch(tmp_path):
+    st = pd.Store(tmp_path / "s.db")
+    for i in range(5):
+        st.enqueue(f"r{i}", 1000 + i, "deal", {"i": i})
+    for i in range(3):
+        st.enqueue(f"s{i}", 200 + i, "slab", {"i": i})
+    got = st.take_best(3, 3, 0.7)
+    assert [k for k, _ in got].count("slab") == 2 and len(got) == 3
+
+
+def test_slab_identified_without_number(tmp_path):
+    l = pd.parse_mp_listing(mp("p", "Pikachu with Grey Felt Hat PSA 10", 90000))
+    with mock.patch.object(pd, "ppt_card", return_value={"name": "Pikachu with Grey Felt Hat", "set": "SVP", "psa10": 1500.0}):
+        c = pd.auto_identify(l, CFG, pd.Store(tmp_path / "x.db"))
+    assert c and c["slab"]

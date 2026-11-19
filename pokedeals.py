@@ -108,9 +108,13 @@ class Store:
                         (qid, score, kind, json.dumps(data, default=str), time.time()))
         self.db.commit()
 
-    def take_best(self, n: int, max_age_h: float) -> list:
+    def take_best(self, n: int, max_age_h: float, slab_share: float = 0.0) -> list:
         self.db.execute("DELETE FROM queue WHERE ts < ?", (time.time() - max_age_h * 3600,))
-        rows = self.db.execute("SELECT id, kind, data FROM queue ORDER BY score DESC LIMIT ?", (n,)).fetchall()
+        n_slab = round(n * slab_share)
+        rows = self.db.execute("SELECT id, kind, data FROM queue WHERE kind='slab' ORDER BY score DESC LIMIT ?",
+                               (n_slab,)).fetchall()
+        rows += self.db.execute("SELECT id, kind, data FROM queue WHERE id NOT IN (%s) ORDER BY score DESC LIMIT ?"
+                                % ",".join("?" * len(rows)), [r[0] for r in rows] + [n - len(rows)]).fetchall()
         for r in rows:
             self.db.execute("DELETE FROM queue WHERE id=?", (r[0],))
         self.db.commit()
@@ -557,6 +561,11 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
     if is_japanese(listing.text):
         return jp_identify(listing, cfg, store)
     m = NUM_RE.search(listing.title) or NUM_RE.search(listing.description)
+    if detect_grade(listing.text) and cfg.get("slab_title_matching", True):
+        c = jp_identify(listing, cfg, store, "english")   # PPT: herkent op naam + heeft PSA-prijzen
+        if c:
+            c["slab"] = True
+            return c
     no_price = not listing.price_eur and listing.price_type in ("SEE_DESCRIPTION", "NOTK", "FAST_BID", "MIN_BID", "BID")
     worth = no_price or (listing.price_eur and listing.price_eur >= float(cfg.get("title_lookup_min_price", 15)))
     if cfg.get("use_tcgdex", True) and (m or worth):
@@ -1267,7 +1276,7 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             except Exception as e:
                 log.error("Melding mislukt: %s", e)
         else:
-            store.enqueue("deal:" + l.id, d.profit, "deal", _deal_to_dict(d))
+            store.enqueue("deal:" + l.id, d.profit, "slab" if d.kind == "graded" else "deal", _deal_to_dict(d))
 
 
 def run_once(cfg: dict, store: Store) -> list[Deal]:
@@ -1336,10 +1345,11 @@ def flush_queue(cfg: dict, store: Store, force: bool = False):
     if not force and time.time() - last < every:
         return 0
     store.kv_set("last_flush", time.time())
-    items = store.take_best(int(cfg.get("batch_size", 3)), float(cfg.get("queue_max_age_hours", 3)))
+    items = store.take_best(int(cfg.get("batch_size", 3)), float(cfg.get("queue_max_age_hours", 3)),
+                            float(cfg.get("slab_share", 0.7)))
     for kind, data in items:
         try:
-            if kind == "deal":
+            if kind in ("deal", "slab"):
                 send_deal(cfg, _deal_from_dict(data))
             else:
                 send_bid_chance(cfg, Listing(**data["listing"]), data["card"], data["b"])

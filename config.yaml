@@ -20,6 +20,10 @@ searches:
   - "pokemon kaarten"
   - "pokemon japans"
   - "pokemon holo"
+  - "psa 10 pokemon"
+  - "psa 9 pokemon"
+  - "cgc pokemon"
+  - "graded pokemon"
 
 # Meldingen via Discord (aanrader). Webhook-URL als GitHub secret DISCORD_WEBHOOK,
 # niet hier invullen (je repo is openbaar).
@@ -97,6 +101,8 @@ vision:
 # Rustig houden: deals worden verzameld en elke `batch_minutes` krijg je de beste `batch_size`.
 batch_minutes: 15
 batch_size: 3
+slab_share: 0.7              # ~70% van de berichten zijn slabs (als die er zijn)
+slab_title_matching: true    # slabs ook zonder kaartnummer herkennen (via pokemonpricetracker)
 queue_max_age_hours: 3       # oudere deals uit de wachtrij vallen weg
 instant_topdeals: true       # TOPDEAL (€300+) meteen sturen
 check_bids: true             # bij bieden-advertenties eerst het hoogste bod checken
