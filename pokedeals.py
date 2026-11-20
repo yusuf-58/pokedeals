@@ -438,6 +438,8 @@ def ebay_token(cfg: dict, store: Store) -> str | None:
     cid, sec = ebay_creds(cfg)
     if not cid or not sec:
         return None
+    if time.time() < float(store.kv_get("ebay_fail_until", 0)):
+        return None                                   # keys werkten niet: even niet proberen
     tok = store.kv_get("ebay_token")
     exp = float(store.kv_get("ebay_token_exp", 0))
     if tok and time.time() < exp - 60:
@@ -449,7 +451,8 @@ def ebay_token(cfg: dict, store: Store) -> str | None:
         r.raise_for_status()
         d = r.json()
     except Exception as e:
-        log.warning("eBay token mislukt: %s", e)
+        log.warning("eBay token mislukt: %s (6 uur pauze)", e)
+        store.kv_set("ebay_fail_until", time.time() + 6 * 3600)
         return None
     store.kv_set("ebay_token", d["access_token"])
     store.kv_set("ebay_token_exp", time.time() + float(d.get("expires_in", 7200)))
