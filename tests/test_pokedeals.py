@@ -582,3 +582,11 @@ def test_below_market_needs_real_profit():
     assert pd.too_expensive(cfg, -8, -5, 90, 100)          # 10% onder + verlies: nee
     assert pd.too_expensive(cfg, 10, 10, 80, 100)          # 20% onder maar maar €10 winst: nee
     assert not pd.too_expensive(cfg, 60, 50, 70, 200)
+
+
+def test_old_queue_purged_once(tmp_path):
+    st = pd.Store(tmp_path / "old.db")
+    st.kv_set("queue_version", "1"); st.mark("x")
+    st.enqueue("deal:a", 10, "deal", {})
+    assert pd.flush_queue(REAL_CFG, st) == 0
+    assert st.db.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == 0

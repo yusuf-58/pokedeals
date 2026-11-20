@@ -93,6 +93,11 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS slabs (id TEXT PRIMARY KEY, grade TEXT, toks TEXT, price REAL, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, score REAL, kind TEXT, data TEXT, ts REAL)")
         self.db.commit()
+        self.fresh_init()
+
+    def fresh_init(self):
+        if self.is_empty() and self.kv_get("queue_version") is None:
+            self.kv_set("queue_version", "3")
 
     def needs_eval(self, lid: str, price, recheck_hours: float = 12) -> bool:
         row = self.db.execute("SELECT price, ts FROM evaluated WHERE id=?", (lid,)).fetchone()
@@ -1634,6 +1639,10 @@ def flush_queue(cfg: dict, store: Store, force: bool = False):
     every = float(cfg.get("batch_minutes", 30)) * 60
     last = float(store.kv_get("last_flush", 0))
     if not force and time.time() - last < every:
+        return 0
+    if store.kv_get("queue_version") != "3":           # oude (foute) wachtrij weggooien na regelwijziging
+        store.db.execute("DELETE FROM queue"); store.db.commit()
+        store.kv_set("queue_version", "3")
         return 0
     store.kv_set("last_flush", time.time())
     if not cfg.get("bid_alerts", True):
