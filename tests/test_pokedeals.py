@@ -198,7 +198,7 @@ def test_bot_message_with_buttons():
     assert pd.suggest_offer(d, CFG) == 480          # bieden: 80% van 600
     d2 = pd.Deal(pd.Listing("x", "t", "", 47.0, "FIXED", "u"), {"name": "n"}, "raw", None, 52, 80, 28, 50)
     assert pd.suggest_offer(d2, CFG) == 42          # vast: 90% van 47
-    cfg = {**CFG, "discord": {**CFG["discord"], "bot_token": "T", "channel_id": "123"}}
+    cfg = {**CFG, "negotiate": True, "discord": {**CFG["discord"], "bot_token": "T", "channel_id": "123"}}
     resp = mock.Mock(); resp.raise_for_status = lambda: None
     with mock.patch.object(pd.requests, "post", return_value=resp) as p:
         pd.send_deal(cfg, d)
@@ -314,8 +314,8 @@ def test_bid_chance_and_stats(tmp_path):
          mock.patch.object(pd, "send_daily_summary", side_effect=lambda *a: sent.append("sum")), \
          mock.patch.object(pd.time, "sleep"):
         store.mark("dummy")
-        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0, "batch_minutes": 0}, store)
-        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0, "batch_minutes": 0}, store)
+        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0, "batch_minutes": 0, "bid_alerts": True}, store)
+        pd.run_once({**REAL_CFG, "daily_summary_hour": 0, "backfill_pages": 0, "batch_minutes": 0, "bid_alerts": True}, store)
     day = pd.local_now().strftime("%Y-%m-%d")
     st = store.stats(day)
     assert st["new"] == 2 and st["identified"] == 2 and st["bids"] == 1
@@ -516,3 +516,25 @@ def test_marktplaats_comps(tmp_path):
          mock.patch.object(pd.time, "sleep"):
         pd.process_listing(cheap, cfg, st, "d", counts, deals)
     assert deals and deals[0].market == 450.0 and "Marktplaats" in deals[0].source
+
+
+def test_sealed_comps_and_message(tmp_path):
+    st = pd.Store(tmp_path / "sd.db")
+    for i, p in enumerate([180, 190, 200, 210]):
+        l = pd.parse_mp_listing(mp(f"e{i}", "Pokemon 151 Elite Trainer Box sealed", p * 100))
+        assert pd.detect_sealed(l) == "ETB"
+        pd.remember_sealed(l, "ETB", st)
+    assert pd.detect_sealed(pd.parse_mp_listing(mp("x", "Lege 151 elite trainer box", 1000))) is None
+    assert pd.detect_sealed(pd.parse_mp_listing(mp("y", "Charizard 4/102 holo", 1000))) is None
+    cheap = pd.parse_mp_listing(mp("c", "151 ETB elite trainer box nieuw", 2000))
+    v, n = pd.marktplaats_sealed_value(cheap, "ETB", st, REAL_CFG)
+    assert n == 4 and v == 195.0
+    counts = {"new": 0, "id": 0, "val": 0}; deals = []
+    cfg = {**REAL_CFG, "min_profit_eur": 50, "batch_minutes": 0}
+    with mock.patch.object(pd, "match_card", return_value=None), mock.patch.object(pd, "auto_identify", return_value=None):
+        pd.process_listing(cheap, cfg, st, "d", counts, deals)
+    assert deals and deals[0].kind == "sealed" and deals[0].market == 195.0
+    emb = pd.deal_embed(deals[0], cfg)
+    names = [f["name"] for f in emb["fields"]]
+    assert "📉 Onder marktwaarde" in names and not any("bod" in n.lower() for n in names)
+    assert "voor €20" in pd.seller_message(deals[0], 0, cfg)

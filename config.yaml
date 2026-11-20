@@ -32,6 +32,11 @@ searches:
 discord:
   webhook_url: ""
 
+# Onderhandelen tonen? Uit = bericht om te kopen voor de vraagprijs.
+negotiate: false
+# Sealed (booster boxes, ETB's, ...) vergelijken met dezelfde sealed op Marktplaats
+sealed_deals: true
+
 # Onderhandelen: geschat bod = % van vraagprijs
 negotiation:
   your_name: "Yusuf"
@@ -120,7 +125,7 @@ check_bids: true             # bij bieden-advertenties eerst het hoogste bod che
 allow_uncertain: false
 
 # Advertenties zonder vraagprijs ("Bieden", "n.o.t.k.") met waardevolle kaart melden
-bid_alerts: true
+bid_alerts: false            # uit: alleen deals waar de VRAAGPRIJS al onder de marktwaarde zit
 bid_alert_min_value: 0       # geen minimum: alleen of er €min_profit winst mogelijk is
 
 # Dagoverzicht in Discord (uur, Nederlandse tijd). -1 = uit

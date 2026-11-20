@@ -543,6 +543,70 @@ def remember_slab(l: Listing, grade: str, store: Store):
         store.db.commit()
 
 
+SEALED_TYPES = [
+    ("UPC", r"ultra[\s-]*premium|\bupc\b"),
+    ("ETB", r"elite\s*trainer\s*box|\betb\b"),
+    ("BOOSTER BOX", r"booster\s*(?:box|display|doos)|\bdisplay\b|36\s*(?:boosters|packs)"),
+    ("BOOSTER BUNDLE", r"booster\s*bundle"),
+    ("PREMIUM COLLECTION", r"premium\s*collection"),
+    ("COLLECTION BOX", r"collection\s*box|\bcollectie\s*box"),
+    ("BLISTER", r"blister|checklane"),
+    ("TIN", r"\btin\b"),
+    ("BOOSTER PACK", r"booster\s*pack|\bbooster\b"),
+]
+SEALED_WORDS = {"sealed", "geseald", "seal", "nieuw", "new", "ongeopend", "factory", "box", "boxes", "display",
+                "booster", "boosters", "bundle", "elite", "trainer", "etb", "upc", "ultra", "premium",
+                "collection", "pack", "packs", "blister", "tin", "doos", "english", "engels", "pokemon", "pokémon",
+                "tcg", "scarlet", "violet", "sword", "shield", "sv", "swsh", "the", "and", "van", "met"}
+
+
+def detect_sealed(l: Listing) -> str | None:
+    t = l.text
+    if any(w in t for w in SEALED_BAD) or BAD_COND_RE.search(t) or detect_grade(t):
+        return None
+    if not re.search(r"seal|geseald|ongeopend|nieuw|new|booster|elite trainer|\betb\b|display|bundle|collection", t):
+        return None
+    for name, rx in SEALED_TYPES:
+        if re.search(rx, t, re.I):
+            if re.search(r"\b(lege|leeg|empty|zonder|alleen|only)\b", t):
+                return None
+            return name
+    return None
+
+
+def sealed_tokens(title: str) -> list[str]:
+    toks = re.findall(r"[a-zé]+|\d{2,3}", title.lower())
+    return [w for w in toks if w not in SEALED_WORDS and w not in SLAB_GENERIC and len(w) > 2]
+
+
+def remember_sealed(l: Listing, kind: str, store: Store):
+    if not l.price_eur or l.price_eur < 5 or l.price_type != "FIXED":
+        return
+    if re.search(r"\b(\d+\s*x|lot|bundel van|set van|stuks)\b", l.text):
+        return
+    toks = sealed_tokens(l.title)
+    if toks:
+        store.db.execute("INSERT OR REPLACE INTO slabs VALUES (?,?,?,?,?)",
+                         (l.id, "SEALED " + kind + (" JP" if is_japanese(l.text) else ""),
+                          " ".join(toks), l.price_eur, time.time()))
+        store.db.commit()
+
+
+def marktplaats_sealed_value(l: Listing, kind: str, store: Store, cfg: dict) -> tuple[float | None, int]:
+    me = set(sealed_tokens(l.title))
+    if not me:
+        return None, 0
+    grade = "SEALED " + kind + (" JP" if is_japanese(l.text) else "")
+    rows = store.db.execute("SELECT toks, price FROM slabs WHERE grade=? AND ts>? AND id<>?",
+                            (grade, time.time() - 30 * 86400, l.id)).fetchall()
+    prices = [p for toks, p in rows if set(toks.split()) == me]          # zelfde set/product
+    n = len(prices)
+    if n < int(cfg.get("mp_comps_min", 3)):
+        return None, n
+    prices.sort()
+    return round(prices[n // 2] if n % 2 else (prices[n // 2 - 1] + prices[n // 2]) / 2, 2), n
+
+
 def marktplaats_slab_value(l: Listing, grade: str, store: Store, cfg: dict) -> tuple[float | None, int]:
     """Mediaan van vergelijkbare slabs (zelfde kaart + cijfer) op Marktplaats, laatste 30 dagen."""
     me = slab_tokens(l.title)
@@ -1057,7 +1121,8 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
             return None
         if any(w in listing.text for w in SEALED_BAD):
             return None
-        sell = v.raw * (1 - c["cardmarket_fee_pct"] / 100) - c.get("sealed_ship_eur", 10)
+        fee = 0 if card.get("src") else c["cardmarket_fee_pct"]
+        sell = v.raw * (1 - fee / 100) - c.get("sealed_ship_eur", 10)
         profit = sell - buy
         margin = profit / buy * 100 if buy else 0
         if profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]:
@@ -1141,6 +1206,9 @@ def suggest_offer(d: Deal, cfg: dict) -> int:
 
 
 def seller_message(d: Deal, offer: int, cfg: dict) -> str:
+    if not cfg.get("negotiate", False):
+        return (f"Hoi! Is je {d.listing.title[:60]} nog beschikbaar? Ik wil hem graag kopen voor "
+                f"€{d.listing.price_eur:.0f}. Ik kan direct betalen en hem ophalen of laten verzenden. Groetjes!")
     naam = (cfg.get("negotiation") or {}).get("your_name", "Yusuf")
     kaart = d.listing.title[:60]
     return (f"Hoi! Ik heb interesse in je {kaart}. Is hij nog beschikbaar? "
@@ -1155,12 +1223,12 @@ def deal_embed(d: Deal, cfg: dict) -> dict:
     profit_offer = d.sell_value - offer - c["buy_shipping_eur"]
     label = d.grade or {"lot": "📷 AI-herkend", "sealed": "📦 Sealed"}.get(d.kind, "Raw")
     bid = " (bieden)" if l.price_type != "FIXED" else ""
+    below = (1 - l.price_eur / d.market) * 100 if d.market else 0
     fields = [
         {"name": "💶 Vraagprijs", "value": f"€{l.price_eur:.2f}{bid}", "inline": True},
         {"name": "📈 Marktwaarde", "value": f"€{(d.market or 0):.2f}", "inline": True},
-        {"name": "🤝 Waarschijnlijk te koop voor", "value": f"~€{offer}", "inline": True},
-        {"name": "💰 Winst bij vraagprijs", "value": f"€{d.profit:.2f} ({d.margin_pct:.0f}%)", "inline": True},
-        {"name": "💰 Winst bij bod", "value": f"€{profit_offer:.2f}", "inline": True},
+        {"name": "📉 Onder marktwaarde", "value": f"{below:.0f}%", "inline": True},
+        {"name": "💰 Winst (na kosten)", "value": f"€{d.profit:.2f} ({d.margin_pct:.0f}%)", "inline": True},
         {"name": "🏷️ Type", "value": label, "inline": True},
     ]
     if d.source:
@@ -1171,6 +1239,8 @@ def deal_embed(d: Deal, cfg: dict) -> dict:
     desc = f"**{l.title[:200]}**" + (f"\n📍 {l.city}" if l.city else "")
     if d.kind == "lot":
         desc += "\n⚠️ AI-herkenning: check de foto's zelf!"
+    if cfg.get("negotiate", False):
+        fields.insert(3, {"name": "🤝 Waarschijnlijk te koop voor", "value": f"~€{offer}", "inline": True})
     e = {"title": f"{d.card['name']}"[:256], "url": l.url, "description": desc,
          "color": 0x2ECC71, "fields": fields,
          "footer": {"text": "Verkoopwaarde is na fees en verzendkosten"}}
@@ -1386,6 +1456,29 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
     grade = detect_grade(l.text)
     if grade:
         remember_slab(l, grade, store)
+    sk = detect_sealed(l) if cfg.get("sealed_deals", True) and not grade else None
+    if sk:
+        remember_sealed(l, sk, store)
+        if not (card and card.get("type") == "sealed" and _num(card.get("value_eur"))):
+            sv, n = marktplaats_sealed_value(l, sk, store, cfg)
+            if sv:
+                counts["id"] += 1
+                card = {"name": f"📦 {sk}: {' '.join(sealed_tokens(l.title)).title()}"[:120], "type": "sealed",
+                        "value_eur": sv, "src": f"Marktplaats: mediaan van {n} dezelfde {sk.lower()}s"}
+            else:
+                return
+    if card and card.get("type") == "sealed":
+        v = get_values(card, cfg, store)
+        if card.get("src"):
+            v.sources = [card["src"]]
+        d = evaluate(l, card, v, cfg)
+        if d:
+            d.source = ", ".join(v.sources)
+            store.enqueue("deal:" + l.id, d.profit, "slab", _deal_to_dict(d))   # sealed telt mee als 'top'
+            deals.append(d)
+            store.inc(day, "deals")
+            log.info("DEAL sealed: %s", format_deal(d)[0])
+        return
     use_ebay = grade and all(ebay_creds(cfg))
     use_comps = grade and cfg.get("mp_comps", True)
     if not card and (use_ebay or use_comps):
@@ -1531,6 +1624,9 @@ def flush_queue(cfg: dict, store: Store, force: bool = False):
     if not force and time.time() - last < every:
         return 0
     store.kv_set("last_flush", time.time())
+    if not cfg.get("bid_alerts", True):
+        store.db.execute("DELETE FROM queue WHERE kind='bid'")
+        store.db.commit()
     items = store.take_best(int(cfg.get("batch_size", 3)), float(cfg.get("queue_max_age_hours", 3)),
                             float(cfg.get("slab_share", 0.7)))
     for kind, data in items:
