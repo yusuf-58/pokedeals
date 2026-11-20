@@ -26,7 +26,7 @@ HERE = Path(__file__).resolve().parent
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/130.0 Safari/537.36")
 MP_SEARCH = "https://www.marktplaats.nl/lrp/api/search"
-PRICE_CACHE_HOURS = 12
+PRICE_CACHE_HOURS = 6     # prijzen max 6 uur oud
 
 GRADE_RE = re.compile(
     r"\b(psa|cgc|bgs|beckett|sgc|tag|ace)\s*[-:#]?\s*(10|[1-9](?:\.5)?)\b", re.I)
@@ -598,7 +598,7 @@ def marktplaats_sealed_value(l: Listing, kind: str, store: Store, cfg: dict) -> 
         return None, 0
     grade = "SEALED " + kind + (" JP" if is_japanese(l.text) else "")
     rows = store.db.execute("SELECT toks, price FROM slabs WHERE grade=? AND ts>? AND id<>?",
-                            (grade, time.time() - 30 * 86400, l.id)).fetchall()
+                            (grade, time.time() - float(cfg.get("comps_days", 14)) * 86400, l.id)).fetchall()
     prices = [p for toks, p in rows if set(toks.split()) == me]          # zelfde set/product
     n = len(prices)
     if n < int(cfg.get("mp_comps_min", 3)):
@@ -615,7 +615,7 @@ def marktplaats_slab_value(l: Listing, grade: str, store: Store, cfg: dict) -> t
     num_me = [w for w in me if "/" in w]
     words_me = {w for w in me if "/" not in w}
     rows = store.db.execute("SELECT id, toks, price FROM slabs WHERE grade=? AND ts>? AND id<>?",
-                            (grade, time.time() - 30 * 86400, l.id)).fetchall()
+                            (grade, time.time() - float(cfg.get("comps_days", 14)) * 86400, l.id)).fetchall()
     prices = []
     for _id, toks, price in rows:
         other = toks.split()
@@ -663,12 +663,16 @@ def tcgdex_get(path: str, params: dict | None, store: Store):
 
 
 def tcgdex_price(card: dict, fx: float) -> float | None:
-    """Cardmarket (EUR) uit TCGdex; anders TCGplayer (USD->EUR). Voorzichtig: laagste van avg30/trend."""
+    """Cardmarket-prijs van NU (EUR): trend + gemiddelde van de laatste 1-7 dagen, laagste = voorzichtig.
+    Geen 30-dagen-gemiddelde: dat loopt achter als een kaart snel daalt of stijgt."""
     p = (card or {}).get("pricing") or {}
     cm = p.get("cardmarket") or {}
-    vals = [v for v in (_num(cm.get("avg30")), _num(cm.get("trend")), _num(cm.get("avg"))) if v]
+    now = [v for v in (_num(cm.get("trend")), _num(cm.get("avg7")), _num(cm.get("avg1"))) if v]
+    if now:
+        return round(min(now), 2)
+    vals = [v for v in (_num(cm.get("avg")), _num(cm.get("avg30"))) if v]
     if vals:
-        return round(min(vals[:2] or vals), 2)
+        return round(min(vals), 2)
     tp = p.get("tcgplayer") or {}
     mk = []
     for var in tp.values():
@@ -1008,8 +1012,9 @@ def price_pokemontcg(card_id: str, api_key: str) -> float | None:
     r = requests.get(f"https://api.pokemontcg.io/v2/cards/{card_id}", headers=h, timeout=20)
     r.raise_for_status()
     p = ((r.json().get("data") or {}).get("cardmarket") or {}).get("prices") or {}
-    # avg30 = stabiel, trendPrice = actueel; neem de laagste = voorzichtig
-    vals = [v for v in (_num(p.get("avg30")), _num(p.get("trendPrice"))) if v]
+    # prijs van NU: trend + laatste 1-7 dagen (laagste = voorzichtig); avg30 alleen als niks anders
+    vals = [v for v in (_num(p.get("trendPrice")), _num(p.get("avg7")), _num(p.get("avg1"))) if v] \
+        or [v for v in (_num(p.get("avg30")),) if v]
     return min(vals) if vals else None
 
 

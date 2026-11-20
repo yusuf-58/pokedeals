@@ -372,7 +372,7 @@ def test_tcgdex_number_and_name(tmp_path):
         c = pd.auto_identify(l, CFG, store)
         assert c and c["tcgdex_ids"] == ["swsh7-215"]
         v = pd.get_values(c, CFG, store)
-        assert v.raw == 1100.0 and "TCGdex" in v.sources[0]
+        assert v.raw == 1200.0 and "TCGdex" in v.sources[0]   # trend = prijs van nu
         l2 = pd.parse_mp_listing(mp("2", "Charizard VMAX shiny", 5000))
         assert pd.auto_identify(l2, CFG, store) is None          # standaard: niet raden
         c2 = pd.auto_identify(l2, {**CFG, "title_only_matching": True}, store)
@@ -548,3 +548,10 @@ def test_only_below_market():
     assert pd.evaluate(pd.parse_mp_listing(mp("a", "Moonbreon", 9500)), card, v, cfg)      # €95 < €100
     assert pd.evaluate(pd.parse_mp_listing(mp("b", "Moonbreon", 10000)), card, v, cfg) is None
     assert pd.evaluate(pd.parse_mp_listing(mp("c", "Moonbreon", 12000)), card, v, cfg) is None
+
+
+def test_price_now_not_30day():
+    c = {"pricing": {"cardmarket": {"avg30": 500.0, "trend": 300.0, "avg7": 320.0, "avg1": 310.0}}}
+    assert pd.tcgdex_price(c, 0.92) == 300.0
+    c2 = {"pricing": {"cardmarket": {"avg30": 500.0}}}
+    assert pd.tcgdex_price(c2, 0.92) == 500.0

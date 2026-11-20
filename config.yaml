@@ -59,6 +59,7 @@ pokemontcg_api_key: ""
 # Gratis slab-prijzen uit Marktplaats zelf: mediaan van dezelfde kaart + cijfer (laatste 30 dagen)
 mp_comps: true
 mp_comps_min: 3              # minimaal zoveel vergelijkbare slabs nodig
+comps_days: 14               # alleen advertenties van de laatste 14 dagen (marktwaarde van nu)
 
 # eBay (gratis developer-account) voor slab-prijzen. Secrets: EBAY_CLIENT_ID + EBAY_CLIENT_SECRET
 ebay:
