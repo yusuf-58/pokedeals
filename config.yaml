@@ -109,7 +109,7 @@ vision:
   min_confidence: 0.75        # AI moet zo zeker zijn
 
 # Rustig houden: deals worden verzameld en elke `batch_minutes` krijg je de beste `batch_size`.
-batch_minutes: 15
+batch_minutes: 30
 batch_size: 3
 slab_share: 0.9              # 90% slabs; raw alleen als er geen slabs genoeg zijn
 slab_title_matching: true    # slabs ook zonder kaartnummer herkennen (via pokemonpricetracker)
