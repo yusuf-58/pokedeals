@@ -983,7 +983,7 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
     buy = listing.price_eur + c["buy_shipping_eur"]
     profit = total_sell - buy
     margin = profit / buy * 100 if buy else 0
-    if profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]:
+    if too_expensive(cfg, profit, margin, listing.price_eur, total_market):
         return None
     note = "Herkend op foto: " + ", ".join(found[:6]) + (" …" if len(found) > 6 else "")
     if unknown:
@@ -1125,7 +1125,7 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
         sell = v.raw * (1 - fee / 100) - c.get("sealed_ship_eur", 10)
         profit = sell - buy
         margin = profit / buy * 100 if buy else 0
-        if profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]:
+        if too_expensive(cfg, profit, margin, listing.price_eur, v.raw):
             return None
         return Deal(listing, card, "sealed", None, round(buy, 2), round(sell, 2),
                     round(profit, 2), round(margin, 1), "📦 Sealed: check of de seal echt intact is!", round(v.raw, 2))
@@ -1162,7 +1162,7 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
 
     profit = sell - buy
     margin = profit / buy * 100 if buy else 0
-    if profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]:
+    if too_expensive(cfg, profit, margin, listing.price_eur, market):
         return None
     if card.get("auto") and margin > float(cfg.get("max_margin_pct", 300)):
         log.info("Overgeslagen (marge %.0f%% = waarschijnlijk verkeerde kaart): %s", margin, listing.title[:60])
@@ -1191,6 +1191,16 @@ def format_deal(d: Deal) -> tuple[str, str]:
         lines.append("⚠️ AI-herkenning: check foto's zelf!")
     lines.append(f"Advertentie: {l.title[:80]}")
     return title, "\n".join(lines)
+
+
+def too_expensive(cfg: dict, profit: float, margin: float, price: float | None, market: float | None) -> bool:
+    """True = geen deal. Modus 'onder marktwaarde': vraagprijs moet onder de marktwaarde liggen."""
+    if cfg.get("only_below_market", False):
+        if not price or not market:
+            return True
+        below = (1 - price / market) * 100
+        return below < float(cfg.get("min_below_market_pct", 1))
+    return profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]
 
 
 def _round_down(x: float) -> int:

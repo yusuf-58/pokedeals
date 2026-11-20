@@ -72,6 +72,10 @@ pricecharting_token: ""
 usd_to_eur: 0.92         # omrekening voor eBay-prijzen in dollars
 
 # Wanneer is iets een deal?
+# Modus 'onder marktwaarde': elke advertentie waarvan de vraagprijs onder de marktwaarde ligt.
+# (min_profit/min_margin hieronder tellen dan niet). De beste komen eerst in je batch.
+only_below_market: true
+min_below_market_pct: 1      # minimaal zoveel % onder de marktwaarde
 min_profit_eur: 150      # minimaal zoveel netto winst (na alle kosten)
 min_margin_pct: 10       # en minimaal zoveel % winst op je inkoop
 

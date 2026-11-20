@@ -6,9 +6,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pokedeals as pd  # noqa: E402
 
-REAL_CFG = pd.load_config(Path(__file__).resolve().parents[1] / "config.yaml")
+REAL_CFG = {**pd.load_config(Path(__file__).resolve().parents[1] / "config.yaml"), "only_below_market": False,
+            "min_profit_eur": 150, "min_margin_pct": 10}
 # tests rekenen met vaste, lage drempels (los van jouw instellingen)
-CFG = {**REAL_CFG, "min_profit_eur": 15, "min_margin_pct": 20}
+CFG = {**REAL_CFG, "min_profit_eur": 15, "min_margin_pct": 20, "only_below_market": False}
 
 
 def mp(item_id, title, cents, ptype="FIXED", desc=""):
@@ -538,3 +539,12 @@ def test_sealed_comps_and_message(tmp_path):
     names = [f["name"] for f in emb["fields"]]
     assert "📉 Onder marktwaarde" in names and not any("bod" in n.lower() for n in names)
     assert "voor €20" in pd.seller_message(deals[0], 0, cfg)
+
+
+def test_only_below_market():
+    cfg = {**REAL_CFG, "only_below_market": True, "min_below_market_pct": 1}
+    card = REAL_CFG["watchlist"][0]
+    v = pd.Values(raw=100)
+    assert pd.evaluate(pd.parse_mp_listing(mp("a", "Moonbreon", 9500)), card, v, cfg)      # €95 < €100
+    assert pd.evaluate(pd.parse_mp_listing(mp("b", "Moonbreon", 10000)), card, v, cfg) is None
+    assert pd.evaluate(pd.parse_mp_listing(mp("c", "Moonbreon", 12000)), card, v, cfg) is None
