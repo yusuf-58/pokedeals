@@ -469,9 +469,11 @@ def test_slab_share_in_batch(tmp_path):
 
 
 def test_slab_identified_without_number(tmp_path):
-    l = pd.parse_mp_listing(mp("p", "Pikachu with Grey Felt Hat PSA 10", 90000))
-    with mock.patch.object(pd, "ppt_card", return_value={"name": "Pikachu with Grey Felt Hat", "set": "SVP", "psa10": 1500.0}):
-        c = pd.auto_identify(l, CFG, pd.Store(tmp_path / "x.db"))
+    st = pd.Store(tmp_path / "x.db")
+    ppt = {"name": "Pikachu with Grey Felt Hat", "set": "SVP", "psa10": 1500.0}
+    with mock.patch.object(pd, "ppt_card", return_value=ppt), mock.patch.object(pd, "tcgdex_identify", return_value=None):
+        assert pd.auto_identify(pd.parse_mp_listing(mp("p", "Pikachu with Grey Felt Hat PSA 10", 90000)), CFG, st) is None
+        c = pd.auto_identify(pd.parse_mp_listing(mp("q", "Pikachu with Grey Felt Hat 085/100 PSA 10", 90000)), CFG, st)
     assert c and c["slab"]
 
 
@@ -502,10 +504,10 @@ def test_ebay_slab_value(tmp_path):
 def test_marktplaats_comps(tmp_path):
     st = pd.Store(tmp_path / "c.db")
     for i, p in enumerate([400, 420, 450, 480, 500]):
-        pd.remember_slab(pd.parse_mp_listing(mp(f"c{i}", f"Umbreon VMAX 215/203 PSA 10 Gem Mint #{i}", p * 100)), "PSA 10", st)
+        pd.remember_slab(pd.parse_mp_listing(mp(f"c{i}", "Umbreon VMAX 215/203 PSA 10 Gem Mint", p * 100)), "PSA 10", st)
     pd.remember_slab(pd.parse_mp_listing(mp("x9", "Umbreon VMAX 215/203 PSA 9", 20000)), "PSA 9", st)
     pd.remember_slab(pd.parse_mp_listing(mp("lot", "Lot 5x PSA 10 Umbreon VMAX 215/203", 10000)), "PSA 10", st)
-    cheap = pd.parse_mp_listing(mp("new", "PSA 10 Umbreon VMAX 215/203 moonbreon", 25000))
+    cheap = pd.parse_mp_listing(mp("new", "PSA 10 Umbreon VMAX 215/203", 25000))
     val, n = pd.marktplaats_slab_value(cheap, "PSA 10", st, REAL_CFG)
     assert n == 5 and val == 450.0
     other = pd.parse_mp_listing(mp("o", "Charizard VMAX PSA 10", 25000))
@@ -542,7 +544,7 @@ def test_sealed_comps_and_message(tmp_path):
 
 
 def test_only_below_market():
-    cfg = {**REAL_CFG, "only_below_market": True, "min_below_market_pct": 1}
+    cfg = {**REAL_CFG, "only_below_market": True, "min_below_market_pct": 1, "min_profit_below": -1e9}
     card = REAL_CFG["watchlist"][0]
     v = pd.Values(raw=100)
     assert pd.evaluate(pd.parse_mp_listing(mp("a", "Moonbreon", 9500)), card, v, cfg)      # €95 < €100
@@ -555,3 +557,28 @@ def test_price_now_not_30day():
     assert pd.tcgdex_price(c, 0.92) == 300.0
     c2 = {"pricing": {"cardmarket": {"avg30": 500.0}}}
     assert pd.tcgdex_price(c2, 0.92) == 500.0
+
+
+def test_strict_comps(tmp_path):
+    st = pd.Store(tmp_path / "sc.db")
+    for i, num in enumerate(["108", "111", "112", "113", "114"]):
+        pd.remember_slab(pd.parse_mp_listing(mp(f"a{i}", f"Ash's Pikachu SM{num} PSA 9", 8000)), "PSA 9", st)
+    l = pd.parse_mp_listing(mp("x", "Ash's Pikachu SM108 PSA 9", 3000))
+    assert pd.marktplaats_slab_value(l, "PSA 9", st, REAL_CFG)[0] is None        # andere nummers tellen niet
+    for i in range(4):
+        pd.remember_slab(pd.parse_mp_listing(mp(f"b{i}", "Gengar VMAX 157/264 PSA 10", [30000, 32000, 31000, 90000][i])), "PSA 10", st)
+    g = pd.parse_mp_listing(mp("g", "Gengar VMAX 157/264 PSA 10", 10000))
+    assert pd.marktplaats_slab_value(g, "PSA 10", st, {**REAL_CFG, "mp_comps_min": 4})[0] is None  # spreiding te groot
+    pd.remember_slab(pd.parse_mp_listing(mp("b9", "Gengar VMAX 157/264 PSA 10", 31500)), "PSA 10", st)
+    pd.remember_slab(pd.parse_mp_listing(mp("b8", "Gengar VMAX 157/264 PSA 10", 30500)), "PSA 10", st)
+    v, n = pd.marktplaats_slab_value(g, "PSA 10", st, {**REAL_CFG, "mp_comps_min": 4})
+    assert n == 6 and v == 312.5
+    # zonder nummer: geen vergelijking
+    assert pd.marktplaats_slab_value(pd.parse_mp_listing(mp("p", "Pikachu McDonald's PSA 10", 1000)), "PSA 10", st, REAL_CFG)[0] is None
+
+
+def test_below_market_needs_real_profit():
+    cfg = {**REAL_CFG, "only_below_market": True, "min_below_market_pct": 15, "min_profit_below": 25}
+    assert pd.too_expensive(cfg, -8, -5, 90, 100)          # 10% onder + verlies: nee
+    assert pd.too_expensive(cfg, 10, 10, 80, 100)          # 20% onder maar maar €10 winst: nee
+    assert not pd.too_expensive(cfg, 60, 50, 70, 200)

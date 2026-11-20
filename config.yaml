@@ -58,7 +58,8 @@ ppt_api_key: ""          # pokemonpricetracker.com = hoofdbron (raw + PSA). Grat
 pokemontcg_api_key: ""
 # Gratis slab-prijzen uit Marktplaats zelf: mediaan van dezelfde kaart + cijfer (laatste 30 dagen)
 mp_comps: true
-mp_comps_min: 3              # minimaal zoveel vergelijkbare slabs nodig
+mp_comps_min: 4              # minimaal 4 exact dezelfde slabs nodig
+comps_max_spread: 1.8        # prijzen mogen niet te ver uiteen lopen
 comps_days: 14               # alleen advertenties van de laatste 14 dagen (marktwaarde van nu)
 
 # eBay (gratis developer-account) voor slab-prijzen. Secrets: EBAY_CLIENT_ID + EBAY_CLIENT_SECRET
@@ -76,7 +77,8 @@ usd_to_eur: 0.92         # omrekening voor eBay-prijzen in dollars
 # Modus 'onder marktwaarde': elke advertentie waarvan de vraagprijs onder de marktwaarde ligt.
 # (min_profit/min_margin hieronder tellen dan niet). De beste komen eerst in je batch.
 only_below_market: true
-min_below_market_pct: 1      # minimaal zoveel % onder de marktwaarde
+min_below_market_pct: 15     # minimaal 15% onder de marktwaarde
+min_profit_below: 25         # en minimaal €25 echte winst na alle kosten
 min_profit_eur: 150      # minimaal zoveel netto winst (na alle kosten)
 min_margin_pct: 10       # en minimaal zoveel % winst op je inkoop
 

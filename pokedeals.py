@@ -527,8 +527,15 @@ SLAB_GENERIC = {"psa", "cgc", "bgs", "sgc", "tag", "ace", "beckett", "gem", "min
 
 def slab_tokens(title: str) -> list[str]:
     t = GRADE_RE.sub(" ", title.lower())
-    toks = re.findall(r"[a-zé]+|\d{1,3}/\d{1,3}", t)
-    return [w for w in toks if w not in SLAB_GENERIC and w not in NAME_SKIP and len(w) > 2 or "/" in w]
+    t = re.sub(r"\b(19|20)\d\d\b", " ", t)                         # jaartallen
+    toks = re.findall(r"[a-zé]+|\d+/\d+|[a-z]*\d+", t)
+    out = []
+    for w in toks:
+        if "/" in w or any(ch.isdigit() for ch in w):
+            out.append(w.lstrip("0") or w)                          # nummers tellen altijd mee
+        elif w not in SLAB_GENERIC and w not in NAME_SKIP and len(w) > 2:
+            out.append(w)
+    return out
 
 
 def remember_slab(l: Listing, grade: str, store: Store):
@@ -608,32 +615,22 @@ def marktplaats_sealed_value(l: Listing, kind: str, store: Store, cfg: dict) -> 
 
 
 def marktplaats_slab_value(l: Listing, grade: str, store: Store, cfg: dict) -> tuple[float | None, int]:
-    """Mediaan van vergelijkbare slabs (zelfde kaart + cijfer) op Marktplaats, laatste 30 dagen."""
-    me = slab_tokens(l.title)
-    if len(me) < 2:
-        return None, 0
-    num_me = [w for w in me if "/" in w]
-    words_me = {w for w in me if "/" not in w}
-    rows = store.db.execute("SELECT id, toks, price FROM slabs WHERE grade=? AND ts>? AND id<>?",
+    """Mediaan van EXACT dezelfde slab (zelfde naam + nummer + cijfer) op Marktplaats, laatste x dagen."""
+    me = set(slab_tokens(l.title))
+    nums = {w for w in me if any(ch.isdigit() for ch in w)}
+    if len(me) < 2 or not nums:
+        return None, 0                                   # zonder kaartnummer: te onzeker
+    rows = store.db.execute("SELECT toks, price FROM slabs WHERE grade=? AND ts>? AND id<>?",
                             (grade, time.time() - float(cfg.get("comps_days", 14)) * 86400, l.id)).fetchall()
-    prices = []
-    for _id, toks, price in rows:
-        other = toks.split()
-        num_o = [w for w in other if "/" in w]
-        words_o = {w for w in other if "/" not in w}
-        shared = words_me & words_o
-        if num_me and num_o:
-            ok = num_me[0] == num_o[0] and len(shared) >= 1      # zelfde kaartnummer + naam
-        else:
-            ok = len(shared) >= 2 and len(shared) >= min(len(words_me), len(words_o)) - 1
-        if ok:
-            prices.append(price)
+    prices = [p for toks, p in rows if set(toks.split()) == me]
     n = len(prices)
-    if n < int(cfg.get("mp_comps_min", 3)):
+    if n < int(cfg.get("mp_comps_min", 4)):
         return None, n
     prices.sort()
+    q1, q3 = prices[n // 4], prices[(3 * n) // 4]
+    if q1 <= 0 or q3 / q1 > float(cfg.get("comps_max_spread", 1.8)):
+        return None, n                                   # prijzen lopen te ver uiteen: onbetrouwbaar
     return round(prices[n // 2] if n % 2 else (prices[n // 2 - 1] + prices[n // 2]) / 2, 2), n
-
 
 # ---------------------------------------------------------------- TCGdex (gratis, geen key)
 TCGDEX = "https://api.tcgdex.net/v2/en"
@@ -780,7 +777,7 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
     if is_japanese(listing.text):
         return jp_identify(listing, cfg, store)
     m = NUM_RE.search(listing.title) or NUM_RE.search(listing.description)
-    if detect_grade(listing.text) and cfg.get("slab_title_matching", True):
+    if detect_grade(listing.text) and cfg.get("slab_title_matching", True) and m:
         c = jp_identify(listing, cfg, store, "english")   # PPT: herkent op naam + heeft PSA-prijzen
         if c:
             c["slab"] = True
@@ -1204,7 +1201,7 @@ def too_expensive(cfg: dict, profit: float, margin: float, price: float | None, 
         if not price or not market:
             return True
         below = (1 - price / market) * 100
-        return below < float(cfg.get("min_below_market_pct", 1))
+        return below < float(cfg.get("min_below_market_pct", 15)) or profit < float(cfg.get("min_profit_below", 25))
     return profit < cfg["min_profit_eur"] or margin < cfg["min_margin_pct"]
 
 
