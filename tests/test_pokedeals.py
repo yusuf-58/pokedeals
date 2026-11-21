@@ -6,10 +6,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pokedeals as pd  # noqa: E402
 
-REAL_CFG = {**pd.load_config(Path(__file__).resolve().parents[1] / "config.yaml"), "only_below_market": False,
+REAL_CFG = {**pd.load_config(Path(__file__).resolve().parents[1] / "config.yaml"), "only_below_market": False, "raw_deals": True,
             "min_profit_eur": 150, "min_margin_pct": 10}
 # tests rekenen met vaste, lage drempels (los van jouw instellingen)
-CFG = {**REAL_CFG, "min_profit_eur": 15, "min_margin_pct": 20, "only_below_market": False}
+CFG = {**REAL_CFG, "raw_deals": True, "min_profit_eur": 15, "min_margin_pct": 20, "only_below_market": False}
 
 
 def mp(item_id, title, cents, ptype="FIXED", desc=""):
@@ -628,3 +628,12 @@ def test_hash_number_with_set(tmp_path):
                              {**CFG, "slab_title_matching": False}, st)
         assert c and c["tcgdex_ids"] == ["neo4-12"]
         assert pd.auto_identify(pd.parse_mp_listing(mp("2", "Light Arcanine #12 Neo Genesis", 5000)), CFG, st) is None
+
+
+def test_raw_off():
+    cfg = {**REAL_CFG, "raw_deals": False, "batch_minutes": 0}
+    st = pd.Store(":memory:"); counts = {"new": 0, "id": 0, "val": 0}; deals = []
+    l = pd.parse_mp_listing(mp("r", "Moonbreon", 30000))
+    with mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000)):
+        pd.process_listing(l, cfg, st, "d", counts, deals)
+    assert deals == []

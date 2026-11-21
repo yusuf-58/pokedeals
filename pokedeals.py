@@ -1583,6 +1583,8 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                               {"listing": asdict(l), "card": {"name": card["name"]}, "b": b})
     else:
         d = evaluate_lot(l, cfg, store)
+    if d and d.kind in ("raw", "lot") and not cfg.get("raw_deals", True):
+        d = None                                        # alleen slabs + sealed
     if d and learned_block(store, d):
         log.info("Geleerd: overgeslagen (eerder als fout gemeld): %s", l.title[:60])
         d = None
@@ -1747,6 +1749,8 @@ def flush_queue(cfg: dict, store: Store, force: bool = False):
         store.kv_set("queue_version", "3")
         return 0
     store.kv_set("last_flush", time.time())
+    if not cfg.get("raw_deals", True):
+        store.db.execute("DELETE FROM queue WHERE kind='deal'")
     if not cfg.get("bid_alerts", True):
         store.db.execute("DELETE FROM queue WHERE kind='bid'")
         store.db.commit()
