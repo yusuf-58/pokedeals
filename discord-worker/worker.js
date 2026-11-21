@@ -70,12 +70,16 @@ export default {
     if (i.type === 3) { // knop ingedrukt
       const user = i.member?.user || i.user || {};
       const name = user.global_name || user.username || "Iemand";
-      const claim = i.data.custom_id === "claim";
+      const cid = i.data.custom_id || "";
+      const claim = cid === "claim";
+      const wrong = cid.startsWith("wrong");
       const msg = i.message || {};
 
       const embed = cleanEmbed(msg.embeds?.[0] || {});
-      embed.color = claim ? 0xf1c40f : 0x95a5a6;
-      embed.footer = { text: claim ? `✅ ${name} heeft dit geclaimd` : `⏭️ ${name} heeft dit overgeslagen` };
+      embed.color = claim ? 0xf1c40f : wrong ? 0xe74c3c : 0x95a5a6;
+      embed.footer = { text: claim ? `✅ ${name} heeft dit geclaimd`
+        : wrong ? `❌ Foute waarde (gemeld door ${name}) - de bot leert hiervan`
+        : `⏭️ ${name} heeft dit overgeslagen` };
 
       // knoppen uitzetten, link-knop blijft werken
       const components = (msg.components || []).map((row) => ({
@@ -86,7 +90,9 @@ export default {
       return json({
         type: 7, // bericht aanpassen
         data: {
-          content: claim ? `✅ **${name}** heeft deze deal geclaimd!` : `⏭️ ${name} heeft deze deal geskipt`,
+          content: claim ? `✅ **${name}** heeft deze deal geclaimd!`
+            : wrong ? `❌ Foute waarde gemeld door ${name}. Bedankt, de bot leert hiervan.`
+            : `⏭️ ${name} heeft deze deal geskipt`,
           embeds: [embed],
           components,
           allowed_mentions: { parse: [] },

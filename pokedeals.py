@@ -91,6 +91,7 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS evaluated (id TEXT PRIMARY KEY, price REAL, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
         self.db.execute("CREATE TABLE IF NOT EXISTS slabs (id TEXT PRIMARY KEY, grade TEXT, toks TEXT, price REAL, ts REAL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS bad (lid TEXT PRIMARY KEY, card TEXT, toks TEXT, source TEXT, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, score REAL, kind TEXT, data TEXT, ts REAL)")
         self.db.commit()
         self.fresh_init()
@@ -724,6 +725,25 @@ def tcgdex_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
     """Herken Engelse kaart via TCGdex: met nummer (215/203) of op naam (voorzichtig)."""
     t = listing.text
     m = NUM_RE.search(listing.title) or NUM_RE.search(listing.description)
+    hm = None if m else re.search(r"(?:#|\bnr\.?\s*|\bno\.?\s*)(\d{1,3})\b", listing.title, re.I)
+    if hm:
+        # "#12 Neo Destiny": nummer + Pokémon-naam + setnaam moeten alle drie kloppen
+        res = tcgdex_get("/cards", {"localId": hm.group(1)}, store) or []
+        res += tcgdex_get("/cards", {"localId": hm.group(1).zfill(3)}, store) or []
+        hits = [c for c in {c["id"]: c for c in res if isinstance(c, dict)}.values()
+                if c.get("name") and _pokemon_matches(c["name"], t)]
+        good = []
+        for c in hits[:8]:
+            d = tcgdex_get(f"/cards/{c['id']}", None, store)
+            setname = ((d or {}).get("set") or {}).get("name") or ""
+            sw = [w for w in _name_words(setname) if len(w) > 2]
+            if d and sw and all(w in _tokens(t) for w in sw):
+                good.append(d)
+        if len(good) == 1:
+            d = good[0]
+            return {"name": f"{d['name']} #{hm.group(1)} ({d['set']['name']})", "tcgdex_ids": [d["id"]],
+                    "ppt_search": f"{d['name']} {d['set']['name']}", "auto": True}
+        return None
     if m:
         num, total = m.group(1).upper(), m.group(2)
         cands = []
@@ -1266,10 +1286,11 @@ def deal_embed(d: Deal, cfg: dict) -> dict:
     return e
 
 
-def deal_buttons(url: str) -> list:
+def deal_buttons(url: str, lid: str = "") -> list:
     return [{"type": 1, "components": [
         {"type": 2, "style": 3, "label": "Claimen", "emoji": {"name": "✅"}, "custom_id": "claim"},
-        {"type": 2, "style": 4, "label": "Skippen", "emoji": {"name": "⏭️"}, "custom_id": "skip"},
+        {"type": 2, "style": 2, "label": "Skippen", "emoji": {"name": "⏭️"}, "custom_id": "skip"},
+        {"type": 2, "style": 4, "label": "Foute waarde", "emoji": {"name": "⚠️"}, "custom_id": f"wrong:{lid}"[:100]},
         {"type": 2, "style": 5, "label": "Open advertentie", "url": url},
     ]}]
 
@@ -1281,7 +1302,7 @@ def send_deal_bot(token: str, channel: str, d: Deal, cfg: dict):
                       headers={"Authorization": f"Bot {token}"}, timeout=15,
                       json={"content": head,
                             "embeds": [deal_embed(d, cfg)],
-                            "components": deal_buttons(d.listing.url),
+                            "components": deal_buttons(d.listing.url, d.listing.id),
                             "allowed_mentions": {"parse": ["everyone"]}})
     if not r.ok:
         hints = {401: "token klopt niet (opnieuw resetten + secret updaten)",
@@ -1491,6 +1512,9 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         d = evaluate(l, card, v, cfg)
         if d:
             d.source = ", ".join(v.sources)
+        if d and learned_block(store, d):
+            d = None
+        if d:
             store.enqueue("deal:" + l.id, d.profit, "slab", _deal_to_dict(d))   # sealed telt mee als 'top'
             deals.append(d)
             store.inc(day, "deals")
@@ -1559,6 +1583,14 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                               {"listing": asdict(l), "card": {"name": card["name"]}, "b": b})
     else:
         d = evaluate_lot(l, cfg, store)
+    if d and learned_block(store, d):
+        log.info("Geleerd: overgeslagen (eerder als fout gemeld): %s", l.title[:60])
+        d = None
+    if d and d.market and cfg.get("only_below_market", False):
+        need = float(cfg.get("min_below_market_pct", 15)) + learned_extra_pct(store, d)
+        if (1 - l.price_eur / d.market) * 100 < need:
+            log.info("Geleerd: te weinig onder marktwaarde voor bron %s (nodig %.0f%%)", source_kind(d.source), need)
+            d = None
     if d:
         if old:
             extra = f"🕰️ Oudere advertentie" + (f" (geplaatst: {l.date})" if l.date else "")
@@ -1580,6 +1612,7 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
     now = local_now()
     day = now.strftime("%Y-%m-%d")
     counts = {"new": 0, "id": 0, "val": 0}
+    learn_from_discord(cfg, store)
     limit, pages = int(cfg.get("mp_limit", 100)), int(cfg.get("mp_pages", 2))
 
     # 1) nieuwste advertenties
@@ -1632,6 +1665,75 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
         except Exception as e:
             log.error("Dagoverzicht mislukt: %s", e)
     return deals
+
+
+# ---------------------------------------------------------------- leren van "Foute waarde"
+def source_kind(src: str) -> str:
+    s_ = (src or "").lower()
+    for k in ("tcgdex", "marktplaats", "ebay", "pricecharting", "ppt", "cardmarket", "handmatig"):
+        if k in s_:
+            return k
+    return "overig" if s_ else "onbekend"
+
+
+def learn_from_discord(cfg: dict, store: Store):
+    """Lees 'Foute waarde'-meldingen uit Discord en onthoud ze."""
+    token = os.getenv("DISCORD_BOT_TOKEN") or (cfg.get("discord") or {}).get("bot_token")
+    channel = os.getenv("DISCORD_CHANNEL_ID") or (cfg.get("discord") or {}).get("channel_id")
+    if not token or not channel:
+        return 0
+    try:
+        r = requests.get(f"https://discord.com/api/v10/channels/{channel}/messages",
+                         headers={"Authorization": f"Bot {token}"}, params={"limit": 100}, timeout=15)
+        r.raise_for_status()
+        msgs = r.json()
+    except Exception as e:
+        log.info("Feedback lezen mislukt: %s", e)
+        return 0
+    n = 0
+    for m in msgs:
+        emb = (m.get("embeds") or [{}])[0]
+        if not ((emb.get("footer") or {}).get("text") or "").startswith("❌ Foute waarde"):
+            continue
+        if store.kv_get(f"fb:{m.get('id')}"):
+            continue
+        lid = ""
+        for row in m.get("components") or []:
+            for c in row.get("components") or []:
+                if str(c.get("custom_id", "")).startswith("wrong:"):
+                    lid = c["custom_id"].split(":", 1)[1]
+        desc = emb.get("description") or ""
+        title_line = desc.split("\n")[0].strip("* ")
+        src = next((f.get("value", "") for f in emb.get("fields") or [] if "Prijsbron" in f.get("name", "")), "")
+        store.db.execute("INSERT OR REPLACE INTO bad VALUES (?,?,?,?,?)",
+                         (lid or m.get("id"), emb.get("title") or "", " ".join(sorted(set(slab_tokens(title_line)))),
+                          source_kind(src), time.time()))
+        store.kv_set(f"fb:{m.get('id')}", 1)
+        n += 1
+    if n:
+        store.db.commit()
+        log.info("Geleerd van %d 'Foute waarde'-meldingen", n)
+    return n
+
+
+def learned_block(store: Store, d: Deal) -> bool:
+    """Lijkt deze deal op een eerder gemelde foute waarde? (zelfde advertentie of zelfde koppeling)"""
+    if store.db.execute("SELECT 1 FROM bad WHERE lid=?", (d.listing.id,)).fetchone():
+        return True
+    me = set(slab_tokens(d.listing.title))
+    for card, toks in store.db.execute("SELECT card, toks FROM bad WHERE card=?", (d.card.get("name", ""),)):
+        other = set(toks.split())
+        if me and other and len(me & other) / len(me | other) >= 0.6:
+            return True
+    return False
+
+
+def learned_extra_pct(store: Store, d: Deal) -> float:
+    """Elke foute melding voor deze prijsbron = 10% strenger (max 40%)."""
+    kind = source_kind(d.source)
+    n = store.db.execute("SELECT COUNT(*) FROM bad WHERE source=? AND ts>?",
+                         (kind, time.time() - 30 * 86400)).fetchone()[0]
+    return min(40.0, 10.0 * n)
 
 
 def flush_queue(cfg: dict, store: Store, force: bool = False):

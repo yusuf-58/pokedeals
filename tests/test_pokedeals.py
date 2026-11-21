@@ -207,7 +207,7 @@ def test_bot_message_with_buttons():
     assert url.endswith("/channels/123/messages")
     assert p.call_args.kwargs["headers"]["Authorization"] == "Bot T"
     ids = [c.get("custom_id") for c in body["components"][0]["components"]]
-    assert ids == ["claim", "skip", None]
+    assert ids == ["claim", "skip", "wrong:test", None]
     names = [f["name"] for f in body["embeds"][0]["fields"]]
     assert any("Bericht voor verkoper" in n for n in names) and any("te koop voor" in n for n in names)
     print(json.dumps(body, ensure_ascii=False, indent=1)[:1500])
@@ -590,3 +590,41 @@ def test_old_queue_purged_once(tmp_path):
     st.enqueue("deal:a", 10, "deal", {})
     assert pd.flush_queue(REAL_CFG, st) == 0
     assert st.db.execute("SELECT COUNT(*) FROM queue").fetchone()[0] == 0
+
+
+def test_learn_from_wrong_feedback(tmp_path):
+    st = pd.Store(tmp_path / "l.db")
+    cfg = {**REAL_CFG, "discord": {"bot_token": "T", "channel_id": "1"}}
+    msgs = [{"id": "m1", "embeds": [{"title": "Groudon Star", "description": "**Groudon XY Black Star Promos 52**\nx",
+              "footer": {"text": "❌ Foute waarde (gemeld door Yusuf) - de bot leert hiervan"},
+              "fields": [{"name": "🔎 Prijsbron", "value": "Cardmarket (TCGdex)"}]}],
+             "components": [{"components": [{"custom_id": "wrong:abc"}]}]},
+            {"id": "m2", "embeds": [{"footer": {"text": "✅ Yusuf heeft dit geclaimd"}}]}]
+    r = mock.Mock(); r.raise_for_status = lambda: None; r.json = lambda: msgs
+    with mock.patch.object(pd.requests, "get", return_value=r):
+        assert pd.learn_from_discord(cfg, st) == 1
+        assert pd.learn_from_discord(cfg, st) == 0            # niet dubbel
+    d = pd.Deal(pd.parse_mp_listing(mp("abc", "x", 100)), {"name": "x"}, "raw", None, 1, 2, 1, 1)
+    assert pd.learned_block(st, d)                             # zelfde advertentie
+    d2 = pd.Deal(pd.parse_mp_listing(mp("zzz", "Groudon XY Black Star Promos 52 NM", 100)),
+                 {"name": "Groudon Star"}, "raw", None, 1, 2, 1, 1)
+    assert pd.learned_block(st, d2)                            # zelfde soort koppeling
+    d3 = pd.Deal(pd.parse_mp_listing(mp("q", "Pikachu 25/102", 100)), {"name": "Pikachu"}, "raw", None, 1, 2, 1, 1,
+                 source="Cardmarket (TCGdex)")
+    assert not pd.learned_block(st, d3) and pd.learned_extra_pct(st, d3) == 10.0
+
+
+def test_hash_number_with_set(tmp_path):
+    st = pd.Store(tmp_path / "h.db")
+    def fake_get(url, params=None, **k):
+        if url.endswith("/cards") and params and params.get("localId") in ("12", "012"):
+            return _resp([{"id": "neo4-12", "name": "Light Arcanine"}, {"id": "base1-12", "name": "Ninetales"}])
+        if url.endswith("/cards/neo4-12"):
+            return _resp({"id": "neo4-12", "name": "Light Arcanine", "set": {"name": "Neo Destiny"},
+                          "pricing": {"cardmarket": {"trend": 150.0}}})
+        return _resp([], 404)
+    with mock.patch.object(pd.requests, "get", side_effect=fake_get):
+        c = pd.auto_identify(pd.parse_mp_listing(mp("1", "Pokémon PSA 8 Light Arcanine Holo #12 Neo Destiny", 57499)),
+                             {**CFG, "slab_title_matching": False}, st)
+        assert c and c["tcgdex_ids"] == ["neo4-12"]
+        assert pd.auto_identify(pd.parse_mp_listing(mp("2", "Light Arcanine #12 Neo Genesis", 5000)), CFG, st) is None
