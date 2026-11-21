@@ -637,3 +637,20 @@ def test_raw_off():
     with mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000)):
         pd.process_listing(l, cfg, st, "d", counts, deals)
     assert deals == []
+
+
+def test_raw_strict():
+    cfg = {**REAL_CFG, "raw_deals": "strict", "only_below_market": True, "batch_minutes": 0,
+           "raw_strict": {"min_below_pct": 25, "min_profit": 40, "require_condition": True, "max_per_day": 1}}
+    card = {"name": "Umbreon VMAX", "tcgdex_ids": ["swsh7-215"], "auto": True}
+    def run(title, price, lid):
+        st_deals = []
+        with mock.patch.object(pd, "match_card", return_value=card), \
+             mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000, sources=["Cardmarket (TCGdex)"])):
+            pd.process_listing(pd.parse_mp_listing(mp(lid, title, price)), cfg, st, "d", {"new": 0, "id": 0, "val": 0}, st_deals)
+        return st_deals
+    st = pd.Store(":memory:")
+    assert run("Umbreon VMAX 215/203", 50000, "a") == []              # geen staat genoemd
+    assert run("Umbreon VMAX 215/203 NM", 85000, "b") == []           # maar 15% onder
+    assert len(run("Umbreon VMAX 215/203 near mint", 50000, "c")) == 1
+    assert run("Umbreon VMAX 215/203 NM", 50000, "d") == []           # daglimiet (1)

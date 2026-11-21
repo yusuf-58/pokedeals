@@ -31,6 +31,8 @@ PRICE_CACHE_HOURS = 6     # prijzen max 6 uur oud
 GRADE_RE = re.compile(
     r"\b(psa|cgc|bgs|beckett|sgc|tag|ace)\s*[-:#]?\s*(10|[1-9](?:\.5)?)\b", re.I)
 # slab zonder (leesbaar) cijfer, of slechte staat -> nooit als NM raw waarderen
+NM_RE = re.compile(r"\b(nm|near\s*mint|mint|perfect|perfecte|top\s*staat|nieuwstaat|als\s*nieuw|"
+                   r"pack\s*fresh|direct\s*(?:uit|in)\s*(?:de\s*)?sleeve)\b", re.I)
 SLAB_RE = re.compile(r"\b(psa|cgc|bgs|beckett|sgc|graded|slab|gegrade?)\b", re.I)
 BAD_COND_RE = re.compile(
     r"\b(played|lp|mp|hp|dmg|damaged|beschadigd|kras(sen)?|vouw|geknakt|creased?|"
@@ -1583,8 +1585,22 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                               {"listing": asdict(l), "card": {"name": card["name"]}, "b": b})
     else:
         d = evaluate_lot(l, cfg, store)
-    if d and d.kind in ("raw", "lot") and not cfg.get("raw_deals", True):
-        d = None                                        # alleen slabs + sealed
+    if d and d.kind in ("raw", "lot"):
+        rd = cfg.get("raw_deals", True)
+        if rd is False:
+            d = None                                    # alleen slabs + sealed
+        elif rd == "strict":
+            rs = cfg.get("raw_strict") or {}
+            ok = (d.kind == "raw" and bool(card.get("tcgdex_ids") or card.get("pokemontcg_id"))  # exact herkend
+                  and not card.get("uncertain")
+                  and (not rs.get("require_condition", True) or NM_RE.search(l.text))           # staat genoemd
+                  and d.market and (1 - l.price_eur / d.market) * 100 >= float(rs.get("min_below_pct", 25))
+                  and d.profit >= float(rs.get("min_profit", 40))
+                  and int(float(store.kv_get(f"rawcount:{day}", 0))) < int(rs.get("max_per_day", 4)))
+            if ok:
+                store.kv_set(f"rawcount:{day}", int(float(store.kv_get(f"rawcount:{day}", 0))) + 1)
+            else:
+                d = None
     if d and learned_block(store, d):
         log.info("Geleerd: overgeslagen (eerder als fout gemeld): %s", l.title[:60])
         d = None
@@ -1749,7 +1765,7 @@ def flush_queue(cfg: dict, store: Store, force: bool = False):
         store.kv_set("queue_version", "3")
         return 0
     store.kv_set("last_flush", time.time())
-    if not cfg.get("raw_deals", True):
+    if cfg.get("raw_deals", True) is False:
         store.db.execute("DELETE FROM queue WHERE kind='deal'")
     if not cfg.get("bid_alerts", True):
         store.db.execute("DELETE FROM queue WHERE kind='bid'")

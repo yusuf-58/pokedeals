@@ -123,7 +123,12 @@ vision:
 # Rustig houden: deals worden verzameld en elke `batch_minutes` krijg je de beste `batch_size`.
 batch_minutes: 30
 batch_size: 3
-raw_deals: false             # alleen slabs + sealed (geen losse raw kaarten)
+raw_deals: "strict"          # true = alle raw, false = geen raw, "strict" = alleen topkwaliteit raw
+raw_strict:
+  min_below_pct: 25          # minimaal 25% onder de marktwaarde
+  min_profit: 40             # minimaal €40 echte winst
+  require_condition: true    # verkoper moet NM / near mint / mint / top staat noemen
+  max_per_day: 4             # maximaal 4 raw deals per dag
 slab_share: 0.9              # 90% slabs; raw alleen als er geen slabs genoeg zijn
 slab_title_matching: true    # slabs ook zonder kaartnummer herkennen (via pokemonpricetracker)
 queue_max_age_hours: 3       # oudere deals uit de wachtrij vallen weg
