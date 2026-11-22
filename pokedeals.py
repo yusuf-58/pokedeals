@@ -1636,6 +1636,7 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
     now = local_now()
     day = now.strftime("%Y-%m-%d")
     counts = {"new": 0, "id": 0, "val": 0}
+    PPT_STATE["old"] = False
     learn_from_discord(cfg, store)
     limit, pages = int(cfg.get("mp_limit", 100)), int(cfg.get("mp_pages", 2))
 
