@@ -105,6 +105,8 @@ title_only_matching: false
 max_margin_pct: 300             # gratis Cardmarket-prijzen via TCGdex (hoofdbron Engelse kaarten)
 # Ook advertenties ZONDER kaartnummer herkennen op titel (kost API-credits)
 title_lookup_min_price: 15   # goedkopere advertenties niet opzoeken
+ppt_cache_hours: 48          # slabprijzen 2 dagen onthouden (spaart tegoed)
+ppt_new_only: true           # tegoed alleen voor nieuwe advertenties
 ppt_daily_budget: 30         # max opzoekingen per dag (gratis tegoed = 100 credits, ~3 per opzoeking)
 
 # Foto's lezen met AI voor advertenties zonder kaartnummers,

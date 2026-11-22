@@ -654,3 +654,16 @@ def test_raw_strict():
     assert run("Umbreon VMAX 215/203 NM", 85000, "b") == []           # maar 15% onder
     assert len(run("Umbreon VMAX 215/203 near mint", 50000, "c")) == 1
     assert run("Umbreon VMAX 215/203 NM", 50000, "d") == []           # daglimiet (1)
+
+
+def test_ppt_saved_for_new(tmp_path):
+    st = pd.Store(tmp_path / "pp.db")
+    cfg = {**CFG, "ppt_api_key": "x"}
+    r = mock.Mock(); r.status_code = 200; r.raise_for_status = lambda: None; r.json = lambda: {"data": [{"name": "A"}]}
+    with mock.patch.object(pd.requests, "get", return_value=r) as g:
+        pd.PPT_STATE["old"] = True
+        assert pd.ppt_card("a", cfg, st, "english") is None and g.call_count == 0
+        pd.PPT_STATE["old"] = False
+        pd.ppt_card("a", cfg, st, "english"); pd.PPT_STATE["old"] = True
+        assert pd.ppt_card("a", cfg, st, "english")["name"] == "A" and g.call_count == 1   # cache mag wel
+    pd.PPT_STATE["old"] = False

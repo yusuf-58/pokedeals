@@ -301,12 +301,17 @@ STOP = {"pokemon", "pokémon", "kaart", "kaarten", "card", "cards", "japans", "j
         "japanese", "jp", "jpn", "jap", "nm", "near", "mint", "holo", "te", "koop", "zgan"}
 
 
+PPT_STATE = {"old": False}
+
+
 def ppt_card(search: str, cfg: dict, store: Store, language: str) -> dict | None:
-    """Zoek kaart + prijzen op pokemonpricetracker (ook Japans). Gecached."""
+    """Zoek kaart + prijzen op pokemonpricetracker (ook Japans). 48 uur gecached; tegoed alleen voor NIEUWE advertenties."""
     key = f"ppt:{language}:{search.lower()}"
-    cached = store.cache_get(key)
-    if cached is not None:
-        return cached or None
+    row = store.db.execute("SELECT ts, data FROM prices WHERE key=?", (key,)).fetchone()
+    if row and time.time() - row[0] < float(cfg.get("ppt_cache_hours", 48)) * 3600:
+        return json.loads(row[1]) or None
+    if PPT_STATE["old"] and cfg.get("ppt_new_only", True):
+        return None                                   # tegoed sparen: oude advertenties niet opzoeken
     api = os.getenv("PPT_API_KEY") or cfg.get("ppt_api_key") or ""
     if not api:
         return None
@@ -1479,6 +1484,7 @@ def is_topdeal(d: Deal) -> bool:
 
 def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                     deals: list, old: bool = False):
+    PPT_STATE["old"] = old
     loose = {**cfg, "min_profit_eur": -1e9, "min_margin_pct": -1e9}
     store.mark_eval(l.id, l.price_eur)
     counts["new"] += 1
