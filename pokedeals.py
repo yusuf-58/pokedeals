@@ -1395,7 +1395,7 @@ def deal_buttons(url: str, lid: str = "") -> list:
 
 
 def send_deal_bot(token: str, channel: str, d: Deal, cfg: dict):
-    top = d.profit >= 300
+    top = is_topdeal(d)
     head = f"@here 🔥 **TOPDEAL: +€{d.profit:.0f}**" if top else f"💰 **Deal: +€{d.profit:.0f}** ({d.margin_pct:.0f}%)"
     r = requests.post(f"https://discord.com/api/v10/channels/{channel}/messages",
                       headers={"Authorization": f"Bot {token}"}, timeout=15,
@@ -1570,8 +1570,11 @@ def _deal_from_dict(x: dict) -> Deal:
     return Deal(**x)
 
 
+TOPDEAL_EUR = [300.0]
+
+
 def is_topdeal(d: Deal) -> bool:
-    return d.profit >= 300
+    return d.profit >= TOPDEAL_EUR[0]
 
 
 REASONS: dict = {}
@@ -1635,6 +1638,13 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             d.source = ", ".join(v.sources)
         if d and learned_block(store, d):
             d = None
+        if d and is_topdeal(d) and cfg.get("instant_topdeals", True):
+            try:
+                send_deal(cfg, d)
+            except Exception as e:
+                log.error("Melding mislukt: %s", e)
+            deals.append(d); store.inc(day, "deals")
+            return
         if d:
             store.enqueue("deal:" + l.id, d.profit, "slab", _deal_to_dict(d))   # sealed telt mee als 'top'
             deals.append(d)
@@ -1756,7 +1766,7 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         deals.append(d)
         store.inc(day, "deals")
         log.info("DEAL%s: %s", " (oud)" if old else "", format_deal(d)[0])
-        if is_topdeal(d) and d.kind == "graded" and cfg.get("instant_topdeals", True):
+        if is_topdeal(d) and cfg.get("instant_topdeals", True):
             try:
                 send_deal(cfg, d)
             except Exception as e:
@@ -1770,6 +1780,7 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
     now = local_now()
     day = now.strftime("%Y-%m-%d")
     counts = {"new": 0, "id": 0, "val": 0}
+    TOPDEAL_EUR[0] = float(cfg.get("topdeal_profit", 300))
     PPT_STATE["old"] = False
     learn_from_discord(cfg, store)
     limit, pages = int(cfg.get("mp_limit", 100)), int(cfg.get("mp_pages", 2))

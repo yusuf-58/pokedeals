@@ -399,7 +399,7 @@ def test_whole_word_name_matching():
 def test_batch_mode(tmp_path):
     store = pd.Store(tmp_path / "q.db")
     cfg = {**CFG, "searches": ["p"], "backfill_pages": 0, "daily_summary_hour": -1,
-           "batch_size": 2, "batch_minutes": 30}
+           "batch_size": 2, "batch_minutes": 30, "topdeal_profit": 100000}
     ls = [pd.parse_mp_listing(mp(f"m{i}", "Moonbreon", 70000 + i * 1000)) for i in range(4)]
     top = pd.parse_mp_listing(mp("top", "Moonbreon", 30000))
     sent = []
@@ -720,3 +720,17 @@ def test_sealed_case_not_compared(tmp_path):
         pd.remember_sealed(pd.parse_mp_listing(mp(f"p{i}", "Destined Rivals Pokemon Center ETB sealed", 25000)), "ETB", st)
     v, n = pd.marktplaats_sealed_value(pd.parse_mp_listing(mp("x", "Destined Rivals ETB sealed", 7000)), "ETB", st, REAL_CFG)
     assert v is None                                     # Pokemon Center-ETB is ander product
+
+
+def test_topdeal_instant(tmp_path):
+    st = pd.Store(tmp_path / "td.db")
+    cfg = {**CFG, "searches": ["p"], "backfill_pages": 0, "daily_summary_hour": -1, "topdeal_profit": 100,
+           "batch_minutes": 30}
+    sent = []
+    st.kv_set("last_flush", 9e12)                                # batch nog niet aan de beurt
+    with mock.patch.object(pd, "fetch_marktplaats", return_value=[pd.parse_mp_listing(mp("t", "Moonbreon", 50000))]), \
+         mock.patch.object(pd, "get_values", return_value=pd.Values(raw=1000)), \
+         mock.patch.object(pd, "send_deal", side_effect=lambda c, d: sent.append(d.listing.id)), \
+         mock.patch.object(pd.time, "sleep"):
+        pd.run_once(cfg, st)
+    assert sent == ["t"]
