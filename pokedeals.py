@@ -303,7 +303,7 @@ except ImportError:                                    # werkt ook zonder rapidf
 # ---------------------------------------------------------------- ruis & taal
 NOISE_RE = re.compile(
     r"\b(gezocht|zoek(?:e|en)?|gevraagd|wanted|ruil(?:en)?|te ruil|trade|nep|fake|proxy|replica|custom|orica|"
-    r"lege\s*(?:doos|box|tin|etb)|leeg|empty|bulk|kilo|per\s*kg|map(?:je)?|binder|verzamelmap|portfolio|"
+    r"lege\s*(?:doos|box|tin|etb|map|binder)|leeg|empty|bulk|kilo|per\s*kg|zonder\s*kaarten|"
     r"sleeves?|toploaders?|deck\s*box|playmat|speelmat|knuffel|pluche|plush|figuur|figure|sticker|poster|"
     r"puzzel|lego|kleding|shirt|tas|munt|coin|pin|badge|code\s*card|online\s*code|digitaal|gold\s*metal\s*card|"
     r"metal\s*card|goud(?:en)?\s*kaart)\b", re.I)
@@ -328,8 +328,16 @@ def detect_language(text: str) -> str:
     return "en"
 
 
+EMPTY_BINDER_RE = re.compile(r"\b(verzamelmap|map(?:je)?|binder|portfolio|album)\b", re.I)
+WITH_CARDS_RE = re.compile(r"\b(met|vol|inclusief|incl|kaarten|cards|holo'?s?|verzameling|collectie)\b", re.I)
+
+
 def is_noise(l: Listing) -> bool:
-    return bool(NOISE_RE.search(l.title)) or (not l.title.strip())
+    if not l.title.strip() or NOISE_RE.search(l.title):
+        return True
+    # losse lege map = ruis; binder mét kaarten = juist interessant
+    t = re.sub(r"\bpok[eé]mon\b", "", l.title, flags=re.I)
+    return bool(EMPTY_BINDER_RE.search(t)) and not WITH_CARDS_RE.search(t)
 
 
 # ---------------------------------------------------------------- matching
@@ -949,11 +957,15 @@ def auto_identify(listing: Listing, cfg: dict, store: Store) -> dict | None:
 
 VISION_PROMPT = """Je ziet foto's van een Marktplaats-advertentie met Pokemon-kaarten.
 Titel: {title}
-Noem ELKE kaart die je duidelijk kunt herkennen. Antwoord ALLEEN met JSON:
-{{"cards": [{{"name": "Engelse kaartnaam, bv. Charizard ex", "number": "kaartnummer zonder totaal of null",
-"set": "set-naam of null", "graded": "bv. PSA 10 of null", "language": "en/jp/nl/other",
-"confidence": 0.0-1.0}}], "looks_fake": true/false, "bulk_unclear": true/false}}
-Gok niet: kaarten die je niet goed kunt lezen laat je weg. Gewone bulk-kaarten (commons) mag je weglaten."""
+Het kan een losse kaart zijn of een verzameling/binder met veel kaarten.
+Noem vooral de WAARDEVOLLE kaarten die je duidelijk herkent: holo's, rares, ex/GX/V, full arts, vintage holo's
+(Base/Jungle/Fossil/Rocket/Gym/Neo), 1st edition, gold stars. Gewone commons/uncommons laat je weg.
+Antwoord ALLEEN met JSON:
+{{"cards": [{{"name": "Engelse kaartnaam, bv. Light Arcanine", "number": "kaartnummer zonder totaal of null",
+"set": "set-naam of null", "holo": true/false, "first_edition": true/false, "graded": "bv. PSA 10 of null",
+"language": "en/jp/nl/de/fr/other", "condition": "nm/lp/mp/hp/onbekend", "confidence": 0.0-1.0}}],
+"looks_fake": true/false, "bulk_unclear": true/false, "estimated_card_count": getal}}
+Gok niet: kaarten die je niet goed kunt lezen laat je weg."""
 
 
 def _parse_json(txt: str) -> dict | None:
@@ -1050,24 +1062,23 @@ def vision_cards(listing: Listing, cfg: dict) -> dict | None:
     return _parse_json("".join(b.get("text", "") for b in r.json().get("content", [])))
 
 
-def lookup_card(name: str, number: str | None, cfg: dict, store: Store) -> str | None:
-    """Zoek pokemontcg.io id voor naam (+nummer). Alleen bij 1 duidelijke hit."""
-    key = f"lookup:{name.lower()}:{number}"
-    cached = store.cache_get(key)
-    if cached is None:
-        q = f'name:"{name}"' + (f' number:"{number.lstrip("0") or number}"' if number else "")
-        tcg_key = os.getenv("POKEMONTCG_API_KEY") or cfg.get("pokemontcg_api_key") or ""
-        try:
-            r = requests.get("https://api.pokemontcg.io/v2/cards",
-                             params={"q": q, "pageSize": 5, "select": "id"},
-                             headers={"X-Api-Key": tcg_key} if tcg_key else {}, timeout=20)
-            r.raise_for_status()
-            cached = [c["id"] for c in r.json().get("data", [])]
-        except Exception as e:
-            log.warning("lookup fout: %s", e)
-            return None
-        store.cache_put(key, cached)
-    return cached[0] if len(cached) == 1 else None
+def lookup_card(name: str, number: str | None, cfg: dict, store: Store, set_name: str | None = None) -> list[str]:
+    """TCGdex-id's voor naam (+nummer, +set). Meerdere = alle passende versies (prijs: laagste)."""
+    res = tcgdex_get("/cards", {"name": name}, store) or []
+    cands = [c for c in res if isinstance(c, dict) and c.get("name", "").lower() == name.lower()]
+    if number:
+        n = str(number).split("/")[0].lstrip("0") or "0"
+        cands = [c for c in cands if str(c.get("localId", "")).lstrip("0") == n] or []
+    if set_name and len(cands) > 1:
+        sw = [w for w in _name_words(set_name) if len(w) > 2]
+        keep = []
+        for c in cands[:10]:
+            d = tcgdex_get(f"/cards/{c['id']}", None, store)
+            sn = ((d or {}).get("set") or {}).get("name", "")
+            if sw and all(w in _tokens(sn) for w in sw):
+                keep.append(c)
+        cands = keep or cands
+    return [c["id"] for c in cands[:8]]
 
 
 def vision_key(cfg: dict) -> str | None:
@@ -1089,6 +1100,10 @@ def vision_quota_ok(cfg: dict, store: Store) -> bool:
     return True
 
 
+COLLECTION_RE = re.compile(r"\b(verzameling|collectie|collection|binder|map\s*met|album|oude\s*pok[eé]mon|"
+                           r"vintage|zolder|jeugd|kavel|partij|holo'?s)\b", re.I)
+
+
 def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
     """Advertentie zonder nummers: lees de foto's en tel de waarde van alle kaarten op."""
     vc = cfg.get("vision") or {}
@@ -1100,8 +1115,9 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
         return None
     if not vision_key(cfg):
         return None
-    if PPT_STATE["old"] and vc.get("new_only", True):
-        return None                                   # AI-tegoed alleen voor nieuwe advertenties
+    is_coll = bool(COLLECTION_RE.search(listing.text))
+    if PPT_STATE["old"] and vc.get("new_only", True) and not is_coll:
+        return None                                   # AI-tegoed alleen voor nieuwe advertenties (verzamelingen altijd)
     if not vision_quota_ok(cfg, store):
         _why("foto-AI daglimiet")
         return None
@@ -1124,10 +1140,11 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
         if lang == "jp":
             info = {"name": card["name"], "ppt_search": search, "language": "japanese", "auto": True}
         elif lang in (None, "en"):
-            cid = lookup_card(card["name"], card.get("number"), cfg, store)
-            info = {"name": card["name"], "ppt_search": search, "auto": True}
-            if cid:
-                info["pokemontcg_id"] = cid
+            ids = lookup_card(card["name"], card.get("number"), cfg, store, card.get("set"))
+            if not ids:
+                unknown += 1
+                continue
+            info = {"name": card["name"], "ppt_search": search, "auto": True, "tcgdex_ids": ids}
         else:
             unknown += 1
             continue
@@ -1148,10 +1165,12 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
             if not val.raw:
                 unknown += 1
                 continue
-            sell = val.raw * (1 - c["cardmarket_fee_pct"] / 100) - c["cardmarket_ship_eur"]
+            cf = (cfg.get("lot_condition") or {}).get(str(card.get("condition") or "onbekend").lower(), 0.7)
+            value = val.raw * float(cf)                     # staat meerekenen (binders zijn vaak bespeeld)
+            sell = value * (1 - c["cardmarket_fee_pct"] / 100) - c["cardmarket_ship_eur"]
             flag = "🇯🇵 " if lang == "jp" else ""
-            found.append(f"{flag}{card['name']} €{val.raw:.0f}")
-            total_market += val.raw
+            found.append(f"{flag}{card['name']} €{value:.0f}")
+            total_market += value
         total_sell += max(sell, 0)
     if not found:
         return None
@@ -1787,13 +1806,19 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                               {"listing": asdict(l), "card": {"name": card["name"]}, "b": b})
     else:
         d = evaluate_lot(l, cfg, store)
-    if d and d.kind in ("raw", "lot"):
+    if d and d.kind == "lot":
+        lr = cfg.get("lot_rules") or {}
+        if not (d.market and (1 - l.price_eur / d.market) * 100 >= float(lr.get("min_below_pct", 30))
+                and d.profit >= float(lr.get("min_profit", 50))):
+            _why("verzameling te duur")
+            d = None
+    if d and d.kind == "raw":
         rd = cfg.get("raw_deals", True)
         if rd is False:
             d = None                                    # alleen slabs + sealed
         elif rd == "strict":
             rs = cfg.get("raw_strict") or {}
-            ok = (d.kind == "raw" and bool(card.get("tcgdex_ids") or card.get("pokemontcg_id"))  # exact herkend
+            ok = (bool(card.get("tcgdex_ids") or card.get("pokemontcg_id"))  # exact herkend
                   and not card.get("uncertain")
                   and (not rs.get("require_condition", True) or NM_RE.search(l.text))           # staat genoemd
                   and d.market and (1 - l.price_eur / d.market) * 100 >= float(rs.get("min_below_pct", 25))

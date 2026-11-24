@@ -137,8 +137,8 @@ def test_vision_lot(tmp_path):
         "looks_fake": False}
     vals = {"a": pd.Values(raw=180), "b": pd.Values(psa10=120)}
     with mock.patch.object(pd, "vision_cards", return_value=ai), \
-         mock.patch.object(pd, "lookup_card", side_effect=["a", "b"]), \
-         mock.patch.object(pd, "get_values", side_effect=lambda i, *a, **k: vals[i["pokemontcg_id"]]):
+         mock.patch.object(pd, "lookup_card", side_effect=[["a"], ["b"]]), \
+         mock.patch.object(pd, "get_values", side_effect=lambda i, *a, **k: vals[i["tcgdex_ids"][0]]):
         d = pd.evaluate_lot(l, cfg, store)
     assert d and d.kind == "lot" and d.profit > 50 and "1 kaart" in d.grading_note
     print(pd.format_deal(d))
@@ -684,6 +684,12 @@ def test_slab_floor_from_raw():
     assert d and d[0].market == 800 and "Ondergrens" in d[0].source
     assert run("Mew ex 232/091 PSA 10", 75000, "b") == []      # maar 6% onder
     assert run("Mew ex 232/091 PSA 8", 30000, "c") == []       # PSA 8: geen ondergrens
+
+
+def test_binder_collection_not_noise():
+    for t in ["Pokemon binder met holo's", "Oude pokemon kaarten verzameling", "Map vol pokemon kaarten"]:
+        assert not pd.is_noise(pd.parse_mp_listing(mp("b", t, 5000))), t
+    assert pd.is_noise(pd.parse_mp_listing(mp("b", "Lege pokemon binder", 500)))
 
 
 def test_noise_language_and_separation():
