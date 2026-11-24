@@ -9,7 +9,7 @@ mp_limit: 100
 mp_pages: 2              # pagina's per zoekterm (voorbij de betaalde dagtoppers)
 # Achtergrondscan: elke run ook oudere advertenties bekijken (tot alles 1x bekeken is,
 # daarna opnieuw; prijsverlagingen worden opnieuw bekeken)
-backfill_pages: 3
+backfill_pages: 2
 backfill_max_offset: 3000
 
 # Zoektermen op Marktplaats (nieuwste advertenties eerst).
@@ -24,6 +24,16 @@ searches:
   - "psa 9 pokemon"
   - "cgc pokemon"
   - "graded pokemon"
+  # sealed
+  - "pokemon booster box"
+  - "pokemon elite trainer box"
+  - "pokemon etb"
+  - "pokemon display"
+  - "pokemon sealed"
+  - "pokemon collection box"
+  - "pokemon tin"
+  - "pokemon blister"
+  - "pokemon booster bundle"
 
 # Meldingen via Discord (aanrader). Webhook-URL als GitHub secret DISCORD_WEBHOOK,
 # niet hier invullen (je repo is openbaar).
@@ -58,6 +68,8 @@ ppt_api_key: ""          # pokemonpricetracker.com = hoofdbron (raw + PSA). Grat
 pokemontcg_api_key: ""
 # Gratis slab-prijzen uit Marktplaats zelf: mediaan van dezelfde kaart + cijfer (laatste 30 dagen)
 mp_comps: true
+fuzzy_slab: 85               # naam-gelijkenis slabs (kaartnummer moet exact gelijk)
+fuzzy_sealed: 90             # naam-gelijkenis sealed (producttype moet gelijk)
 mp_comps_min: 4              # minimaal 4 exact dezelfde slabs nodig
 comps_max_spread: 1.8        # prijzen mogen niet te ver uiteen lopen
 comps_days: 14               # alleen advertenties van de laatste 14 dagen (marktwaarde van nu)
@@ -78,7 +90,7 @@ usd_to_eur: 0.92         # omrekening voor eBay-prijzen in dollars
 # (min_profit/min_margin hieronder tellen dan niet). De beste komen eerst in je batch.
 only_below_market: true
 min_below_market_pct: 10     # minimaal 10% onder de marktwaarde
-min_profit_below: 25         # en minimaal €25 echte winst na alle kosten
+min_profit_below: 100        # minimaal €100 echte winst na alle kosten
 min_profit_eur: 150      # minimaal zoveel netto winst (na alle kosten)
 min_margin_pct: 10       # en minimaal zoveel % winst op je inkoop
 
@@ -136,7 +148,7 @@ slab_floor:
 raw_deals: "strict"          # true = alle raw, false = geen raw, "strict" = alleen topkwaliteit raw
 raw_strict:
   min_below_pct: 20          # raw: minimaal 20% onder de marktwaarde
-  min_profit: 40             # minimaal €40 echte winst
+  min_profit: 100            # raw: minimaal €100 echte winst
   require_condition: true    # verkoper moet NM / near mint / mint / top staat noemen
   max_per_day: 6             # maximaal 6 raw deals per dag
 slab_share: 0.9              # 90% slabs; raw alleen als er geen slabs genoeg zijn

@@ -684,3 +684,29 @@ def test_slab_floor_from_raw():
     assert d and d[0].market == 800 and "Ondergrens" in d[0].source
     assert run("Mew ex 232/091 PSA 10", 75000, "b") == []      # maar 6% onder
     assert run("Mew ex 232/091 PSA 8", 30000, "c") == []       # PSA 8: geen ondergrens
+
+
+def test_noise_language_and_separation():
+    for t in ["Gezocht: charizard", "Ruilen pikachu", "Lege doos 151 etb", "Pokemon bulk 500 kaarten",
+              "Verzamelmap pokemon", "Pikachu knuffel"]:
+        assert pd.is_noise(pd.parse_mp_listing(mp("n", t, 1000))), t
+    assert not pd.is_noise(pd.parse_mp_listing(mp("n", "Charizard ex 199/165 NM", 1000)))
+    assert pd.detect_language("glurak duitse kaart") == "de" and pd.detect_language("umbreon vmax") == "en"
+    st = pd.Store(":memory:"); deals = []; c = {"new": 0, "id": 0, "val": 0}
+    with mock.patch.object(pd, "auto_identify") as ai:
+        pd.process_listing(pd.parse_mp_listing(mp("s", "Evolving Skies Booster Box sealed", 50000)),
+                           REAL_CFG, st, "d", c, deals)
+        assert ai.call_count == 0                       # sealed gaat nooit door kaart-herkenning
+        pd.process_listing(pd.parse_mp_listing(mp("f", "Dracaufeu franse kaart 4/102", 5000)),
+                           REAL_CFG, st, "d", c, deals)
+        assert ai.call_count == 0                       # franse kaart overgeslagen
+
+
+def test_fuzzy_sealed_comps(tmp_path):
+    st = pd.Store(tmp_path / "fz.db")
+    for i, t in enumerate(["Pokemon 151 Elite Trainer Box sealed", "151 ETB elite trainer box nieuw",
+                           "Scarlet Violet 151 elite trainer box", "Pokémon 151 ETB Engels sealed"]):
+        pd.remember_sealed(pd.parse_mp_listing(mp(f"e{i}", t, 20000)), "ETB", st)
+    pd.remember_sealed(pd.parse_mp_listing(mp("x", "Prismatic Evolutions elite trainer box", 9000)), "ETB", st)
+    v, n = pd.marktplaats_sealed_value(pd.parse_mp_listing(mp("c", "151 elite trainer box sealed", 9000)), "ETB", st, REAL_CFG)
+    assert n == 4 and v == 200.0                         # Prismatic telt niet mee

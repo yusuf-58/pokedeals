@@ -214,6 +214,27 @@ def parse_mp_listing(raw: dict) -> Listing:
     )
 
 
+def _get_with_backoff(url: str, params: dict, tries: int = 4):
+    """GET met exponentiële backoff bij rate-limits (429) en serverfouten (5xx)."""
+    wait = 3
+    for i in range(tries):
+        try:
+            r = requests.get(url, params=params, timeout=20,
+                             headers={"User-Agent": UA, "Accept": "application/json",
+                                      "Accept-Language": "nl-NL,nl;q=0.9"})
+            if r.status_code in (429, 500, 502, 503, 504):
+                raise requests.HTTPError(f"{r.status_code}")
+            r.raise_for_status()
+            return r
+        except Exception as e:
+            if i == tries - 1:
+                raise
+            ra = getattr(locals().get("r"), "headers", {}).get("Retry-After") if "r" in locals() else None
+            time.sleep(float(ra) if ra and str(ra).isdigit() else wait)
+            log.info("Marktplaats %s, opnieuw over %ss", e, wait)
+            wait *= 2
+
+
 def fetch_marktplaats(query: str, limit: int = 100, pages: int = 2, start: int = 0) -> list[Listing]:
     """Nieuwste advertenties. Dagtoppers (betaald, staan altijd bovenaan) tellen niet
     mee als 'nieuw', dus we bladeren door tot voorbij de dagtoppers."""
@@ -222,9 +243,7 @@ def fetch_marktplaats(query: str, limit: int = 100, pages: int = 2, start: int =
         params = {"query": query, "limit": limit, "offset": start + page * limit,
                   "sortBy": "SORT_INDEX", "sortOrder": "DECREASING",
                   "viewOptions": "list-view"}
-        r = requests.get(MP_SEARCH, params=params, timeout=20,
-                         headers={"User-Agent": UA, "Accept": "application/json"})
-        r.raise_for_status()
+        r = _get_with_backoff(MP_SEARCH, params)
         raw = r.json().get("listings", [])
         for x in raw:
             if (x.get("priorityProduct") or "NONE") != "NONE":
@@ -264,6 +283,52 @@ def fetch_highest_bid(l: Listing, store: Store | None = None) -> float | None:
         i = html.find('"bids"')
         log.info("DEBUG biedingen %s: %s | %s", l.id, vals[:5], html[i:i+200] if i >= 0 else "geen 'bids' in pagina")
     return max(vals) if vals else None
+
+
+# ---------------------------------------------------------------- fuzzy matching
+try:
+    from rapidfuzz import fuzz as _fuzz
+
+    def similar(a: str, b: str) -> float:
+        return _fuzz.token_set_ratio(a, b)
+except ImportError:                                    # werkt ook zonder rapidfuzz (minder slim)
+    import difflib
+
+    def similar(a: str, b: str) -> float:
+        a_, b_ = " ".join(sorted(set(a.split()))), " ".join(sorted(set(b.split())))
+        return difflib.SequenceMatcher(None, a_, b_).ratio() * 100
+
+
+# ---------------------------------------------------------------- ruis & taal
+NOISE_RE = re.compile(
+    r"\b(gezocht|zoek(?:e|en)?|gevraagd|wanted|ruil(?:en)?|te ruil|trade|nep|fake|proxy|replica|custom|orica|"
+    r"lege\s*(?:doos|box|tin|etb)|leeg|empty|bulk|kilo|per\s*kg|map(?:je)?|binder|verzamelmap|portfolio|"
+    r"sleeves?|toploaders?|deck\s*box|playmat|speelmat|knuffel|pluche|plush|figuur|figure|sticker|poster|"
+    r"puzzel|lego|kleding|shirt|tas|munt|coin|pin|badge|code\s*card|online\s*code|digitaal|gold\s*metal\s*card|"
+    r"metal\s*card|goud(?:en)?\s*kaart)\b", re.I)
+
+LANG_PATTERNS = {
+    "ja": r"\b(japans|japanse|japanese|japan|jpn|jp)\b",
+    "de": r"\b(duits|duitse|german|deutsch|ger)\b",
+    "fr": r"\b(frans|franse|french|français|francais|fra)\b",
+    "it": r"\b(italiaans|italiaanse|italian|ita)\b",
+    "es": r"\b(spaans|spaanse|spanish|español|esp)\b",
+    "zh": r"\b(chinees|chinese|chinese\s*versie|simplified|traditional)\b",
+    "ko": r"\b(koreaans|koreaanse|korean|kor)\b",
+    "nl": r"\b(nederlands|nederlandse|dutch)\b",
+}
+
+
+def detect_language(text: str) -> str:
+    """'en' tenzij een andere taal expliciet genoemd wordt."""
+    for lang, rx in LANG_PATTERNS.items():
+        if re.search(rx, text, re.I):
+            return lang
+    return "en"
+
+
+def is_noise(l: Listing) -> bool:
+    return bool(NOISE_RE.search(l.title)) or (not l.title.strip())
 
 
 # ---------------------------------------------------------------- matching
@@ -619,7 +684,9 @@ def marktplaats_sealed_value(l: Listing, kind: str, store: Store, cfg: dict) -> 
     grade = "SEALED " + kind + (" JP" if is_japanese(l.text) else "")
     rows = store.db.execute("SELECT toks, price FROM slabs WHERE grade=? AND ts>? AND id<>?",
                             (grade, time.time() - float(cfg.get("comps_days", 14)) * 86400, l.id)).fetchall()
-    prices = [p for toks, p in rows if set(toks.split()) == me]          # zelfde set/product
+    me_s = " ".join(sorted(me))
+    thr = float(cfg.get("fuzzy_sealed", 90))
+    prices = [p for toks, p in rows if similar(me_s, " ".join(sorted(set(toks.split())))) >= thr]
     n = len(prices)
     if n < int(cfg.get("mp_comps_min", 3)):
         return None, n
@@ -635,7 +702,16 @@ def marktplaats_slab_value(l: Listing, grade: str, store: Store, cfg: dict) -> t
         return None, 0                                   # zonder kaartnummer: te onzeker
     rows = store.db.execute("SELECT toks, price FROM slabs WHERE grade=? AND ts>? AND id<>?",
                             (grade, time.time() - float(cfg.get("comps_days", 14)) * 86400, l.id)).fetchall()
-    prices = [p for toks, p in rows if set(toks.split()) == me]
+    words_me = " ".join(sorted(w for w in me if not any(ch.isdigit() for ch in w)))
+    thr = float(cfg.get("fuzzy_slab", 85))
+    prices = []
+    for toks, p in rows:
+        other = set(toks.split())
+        if {w for w in other if any(ch.isdigit() for ch in w)} != nums:
+            continue                                     # kaartnummer moet exact gelijk zijn
+        words_o = " ".join(sorted(w for w in other if not any(ch.isdigit() for ch in w)))
+        if similar(words_me, words_o) >= thr:
+            prices.append(p)
     n = len(prices)
     if n < int(cfg.get("mp_comps_min", 4)):
         return None, n
@@ -1492,12 +1568,26 @@ def _why(r: str):
 def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                     deals: list, old: bool = False):
     PPT_STATE["old"] = old
+    if is_noise(l):
+        _why("ruis (gezocht/ruilen/nep/bulk/map...)")
+        store.mark_eval(l.id, l.price_eur)
+        return
+    lang = detect_language(l.text)
+    if lang not in ("en", "ja"):
+        _why(f"taal {lang} (geen betrouwbare prijs)")
+        store.mark_eval(l.id, l.price_eur)
+        return
     loose = {**cfg, "min_profit_eur": -1e9, "min_margin_pct": -1e9}
     store.mark_eval(l.id, l.price_eur)
     counts["new"] += 1
-    card = match_card(l, cfg.get("watchlist") or [])
-    if not card and cfg.get("auto_mode", True):
-        card = auto_identify(l, cfg, store)
+    # Strikte scheiding: sealed product nooit als losse kaart behandelen (en andersom)
+    pre_sealed = (detect_sealed(l) if cfg.get("sealed_deals", True) and not detect_grade(l.text) else None)
+    if pre_sealed:
+        card = match_card(l, [c for c in cfg.get("watchlist") or [] if c.get("type") == "sealed"])
+    else:
+        card = match_card(l, [c for c in cfg.get("watchlist") or [] if c.get("type") != "sealed"])
+        if not card and cfg.get("auto_mode", True):
+            card = auto_identify(l, cfg, store)
     d = None
     if card and card.get("uncertain") and not cfg.get("allow_uncertain", False):
         # versie onzeker: alleen verder via foto-herkenning (als die aan staat), anders niet melden
