@@ -126,7 +126,7 @@ def test_auto_identify(tmp_path):
 
 def test_vision_lot(tmp_path):
     store = pd.Store(tmp_path / "v.db")
-    cfg = {**CFG, "vision": {**CFG["vision"], "enabled": True}}
+    cfg = {**CFG, "vision": {**CFG["vision"], "enabled": True, "gemini_api_key": "k", "min_listing_price": 10}}
     l = pd.parse_mp_listing({**mp("9", "Pokemon kaarten verzameling", 15000),
                              "pictures": [{"largeUrl": "//a.jpg"}, {"largeUrl": "//b.jpg"}]})
     assert len(l.images) == 2

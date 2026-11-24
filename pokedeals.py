@@ -1032,12 +1032,22 @@ def lookup_card(name: str, number: str | None, cfg: dict, store: Store) -> str |
     return cached[0] if len(cached) == 1 else None
 
 
+def vision_key(cfg: dict) -> str | None:
+    v = cfg.get("vision") or {}
+    if v.get("provider", "gemini") == "gemini":
+        return os.getenv("GEMINI_API_KEY") or v.get("gemini_api_key") or None
+    return os.getenv("ANTHROPIC_API_KEY") or v.get("anthropic_api_key") or None
+
+
 def vision_quota_ok(cfg: dict, store: Store) -> bool:
-    day = time.strftime("%Y-%m-%d")
-    used = store.cache_get(f"vision:{day}") or 0
-    if used >= (cfg.get("vision") or {}).get("max_per_day", 150):
+    """Telt alleen echte AI-aanroepen (met key)."""
+    if not vision_key(cfg):
         return False
-    store.cache_put(f"vision:{day}", used + 1)
+    day = time.strftime("%Y-%m-%d")
+    used = int(float(store.kv_get(f"visionq:{day}", 0)))
+    if used >= int((cfg.get("vision") or {}).get("max_per_day", 200)):
+        return False
+    store.kv_set(f"visionq:{day}", used + 1)
     return True
 
 
@@ -1050,9 +1060,14 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
         return None
     if listing.price_eur < vc.get("min_listing_price", 10) or JUNK_RE.search(listing.text):
         return None
-    if not vision_quota_ok(cfg, store):
-        log.info("Vision daglimiet bereikt")
+    if not vision_key(cfg):
         return None
+    if PPT_STATE["old"] and vc.get("new_only", True):
+        return None                                   # AI-tegoed alleen voor nieuwe advertenties
+    if not vision_quota_ok(cfg, store):
+        _why("foto-AI daglimiet")
+        return None
+    _why("foto-AI gebruikt")
     try:
         res = vision_cards(listing, cfg)
     except Exception as e:
