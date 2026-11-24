@@ -128,7 +128,7 @@ vision:
   enabled: true               # doet pas iets als GEMINI_API_KEY is ingesteld
   provider: "gemini"          # gratis. ("claude" kan ook, maar is betaald)
   gemini_api_key: ""
-  model: "gemini-2.5-flash"   # check in AI Studio welke Flash-modellen gratis zijn
+  model: "gemini-flash-latest" # bestaat dit niet meer, dan kiest de bot zelf het nieuwste Flash-model
   max_images: 3               # foto's per advertentie
   max_per_day: 200            # blijf onder de gratis daglimiet
   min_listing_price: 30       # goedkopere advertenties niet scannen (sparen)

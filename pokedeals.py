@@ -961,6 +961,32 @@ def _parse_json(txt: str) -> dict | None:
     return json.loads(m.group(0)) if m else None
 
 
+GEMINI_MODEL = [None]
+
+
+def pick_gemini_model(key: str) -> str | None:
+    """Kies automatisch een beschikbaar (gratis) Flash-model dat afbeeldingen + generateContent ondersteunt."""
+    try:
+        r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
+                         params={"key": key, "pageSize": 200}, timeout=20)
+        r.raise_for_status()
+        models = r.json().get("models") or []
+    except Exception as e:
+        log.warning("Gemini modellen ophalen mislukt: %s", e)
+        return None
+    names = [m["name"].split("/", 1)[-1] for m in models
+             if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    bad = ("image", "tts", "audio", "live", "embedding", "thinking", "exp", "preview")
+    flash = [n for n in names if "flash" in n and not any(b in n for b in bad)]
+    for pref in ("gemini-flash-latest", "gemini-flash-lite-latest"):
+        if pref in flash:
+            return pref
+    flash.sort(reverse=True)                               # hoogste versie eerst
+    chosen = flash[0] if flash else None
+    log.info("Gemini-model gekozen: %s", chosen)
+    return chosen
+
+
 def vision_cards(listing: Listing, cfg: dict) -> dict | None:
     """Lees kaarten van de foto's. Standaard Google Gemini (gratis tier)."""
     v = cfg.get("vision") or {}
@@ -983,12 +1009,17 @@ def vision_cards(listing: Listing, cfg: dict) -> dict | None:
                 "mime_type": ir.headers.get("content-type", "image/jpeg").split(";")[0],
                 "data": base64.b64encode(ir.content).decode()}})
         parts.append({"text": prompt})
-        model = v.get("model", "gemini-2.5-flash")
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            params={"key": key}, timeout=60,
-            json={"contents": [{"parts": parts}],
-                  "generationConfig": {"response_mime_type": "application/json"}})
+        body = {"contents": [{"parts": parts}], "generationConfig": {"response_mime_type": "application/json"}}
+        model = GEMINI_MODEL[0] or v.get("model", "gemini-flash-latest")
+        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                          params={"key": key}, timeout=60, json=body)
+        if r.status_code == 404:                          # model bestaat niet meer: zoek het nieuwste Flash-model
+            model = pick_gemini_model(key)
+            if not model:
+                return None
+            GEMINI_MODEL[0] = model
+            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                              params={"key": key}, timeout=60, json=body)
         if r.status_code == 429:
             log.warning("Gemini gratis limiet bereikt, even wachten")
             return None

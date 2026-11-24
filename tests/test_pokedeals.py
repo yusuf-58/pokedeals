@@ -734,3 +734,23 @@ def test_topdeal_instant(tmp_path):
          mock.patch.object(pd.time, "sleep"):
         pd.run_once(cfg, st)
     assert sent == ["t"]
+
+
+def test_gemini_model_fallback():
+    pd.GEMINI_MODEL[0] = None
+    cfg = {"vision": {"provider": "gemini", "gemini_api_key": "k", "model": "oud-model"}}
+    l = pd.Listing("1", "t", "", 50, "FIXED", "u", images=["https://x/a.jpg"])
+    img = mock.Mock(content=b"abc", headers={"content-type": "image/jpeg"}); img.raise_for_status = lambda: None
+    models = mock.Mock(); models.raise_for_status = lambda: None
+    models.json = lambda: {"models": [
+        {"name": "models/gemini-3.0-flash", "supportedGenerationMethods": ["generateContent"]},
+        {"name": "models/gemini-3.0-flash-image", "supportedGenerationMethods": ["generateContent"]},
+        {"name": "models/gemini-2.9-flash", "supportedGenerationMethods": ["generateContent"]}]}
+    r404 = mock.Mock(status_code=404)
+    ok = mock.Mock(status_code=200); ok.raise_for_status = lambda: None
+    ok.json = lambda: {"candidates": [{"content": {"parts": [{"text": '{"cards": [], "looks_fake": false}'}]}}]}
+    with mock.patch.object(pd.requests, "get", side_effect=[img, models]), \
+         mock.patch.object(pd.requests, "post", side_effect=[r404, ok]) as p:
+        assert pd.vision_cards(l, cfg) == {"cards": [], "looks_fake": False}
+    assert "gemini-3.0-flash:generateContent" in p.call_args[0][0]
+    pd.GEMINI_MODEL[0] = None
