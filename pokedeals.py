@@ -1097,10 +1097,10 @@ def vision_quota_ok(cfg: dict, store: Store) -> bool:
     if not vision_key(cfg):
         return False
     day = time.strftime("%Y-%m-%d")
-    used = int(float(store.kv_get(f"visionq:{day}", 0)))
+    used = int(float(store.kv_get(f"visionq2:{day}", 0)))
     if used >= int((cfg.get("vision") or {}).get("max_per_day", 200)):
         return False
-    store.kv_set(f"visionq:{day}", used + 1)
+    store.kv_set(f"visionq2:{day}", used + 1)
     return True
 
 
@@ -1141,7 +1141,7 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
     except Exception as e:
         VISION_RUN["fails"] += 1
         store.unmark_eval(listing.id)
-        qk = f"visionq:{time.strftime('%Y-%m-%d')}"     # mislukte poging telt niet mee
+        qk = f"visionq2:{time.strftime('%Y-%m-%d')}"     # mislukte poging telt niet mee
         store.kv_set(qk, max(0, int(float(store.kv_get(qk, 1))) - 1))
         log.warning("vision fout: %s", e)
         return None
