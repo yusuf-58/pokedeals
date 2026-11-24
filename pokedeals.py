@@ -110,6 +110,10 @@ class Store:
             return True                                   # opnieuw bekijken (nieuwe prijsbronnen/keys)
         return price is not None and row[0] is not None and price < row[0] - 0.01  # prijs verlaagd
 
+    def unmark_eval(self, lid: str):
+        self.db.execute("DELETE FROM evaluated WHERE id=?", (lid,))
+        self.db.commit()
+
     def mark_eval(self, lid: str, price):
         self.db.execute("INSERT OR REPLACE INTO evaluated VALUES (?,?,?)", (lid, price, time.time()))
         self.db.commit()
@@ -1104,6 +1108,9 @@ COLLECTION_RE = re.compile(r"\b(verzameling|collectie|collection|binder|map\s*me
                            r"vintage|zolder|jeugd|kavel|partij|holo'?s)\b", re.I)
 
 
+VISION_RUN = {"calls": 0, "fails": 0}   # per run: stop bij storing, rest volgende run
+
+
 def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
     """Advertentie zonder nummers: lees de foto's en tel de waarde van alle kaarten op."""
     vc = cfg.get("vision") or {}
@@ -1121,10 +1128,18 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
     if not vision_quota_ok(cfg, store):
         _why("foto-AI daglimiet")
         return None
+    if VISION_RUN["fails"] >= 3 or VISION_RUN["calls"] >= int(vc.get("max_per_run", 25)):
+        store.unmark_eval(listing.id)                 # volgende run opnieuw proberen
+        _why("foto-AI uitgesteld")
+        return None
     _why("foto-AI gebruikt")
+    VISION_RUN["calls"] += 1
     try:
         res = vision_cards(listing, cfg)
+        VISION_RUN["fails"] = 0
     except Exception as e:
+        VISION_RUN["fails"] += 1
+        store.unmark_eval(listing.id)
         log.warning("vision fout: %s", e)
         return None
     if not res or res.get("looks_fake"):
@@ -1860,6 +1875,7 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
     counts = {"new": 0, "id": 0, "val": 0}
     TOPDEAL_EUR[0] = float(cfg.get("topdeal_profit", 300))
     PPT_STATE["old"] = False
+    VISION_RUN.update(calls=0, fails=0)
     learn_from_discord(cfg, store)
     limit, pages = int(cfg.get("mp_limit", 100)), int(cfg.get("mp_pages", 2))
 

@@ -147,6 +147,7 @@ vision:
   provider: "gemini"          # gratis. ("claude" kan ook, maar is betaald)
   gemini_api_key: ""
   model: "gemini-flash-latest" # bestaat dit niet meer, dan kiest de bot zelf het nieuwste Flash-model
+  max_per_run: 25             # max foto-checks per run (run blijft kort)
   max_images: 6               # foto's per advertentie (binders hebben meer foto's)
   max_per_day: 200            # blijf onder de gratis daglimiet
   min_listing_price: 30       # goedkopere advertenties niet scannen (sparen)

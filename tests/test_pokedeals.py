@@ -1,3 +1,4 @@
+import os
 import json
 import sys
 from pathlib import Path
@@ -774,3 +775,16 @@ def test_gemini_503_retry():
          mock.patch.object(pd.requests, "post", side_effect=[busy, busy, ok]) as p, mock.patch.object(pd.time, "sleep"):
         assert pd.vision_cards(l, cfg) == {"cards": []}
     assert "flash-lite" in p.call_args[0][0]
+
+
+def test_vision_breaker_retries_later(tmp_path):
+    cfg = {**pd.load_config(Path(__file__).resolve().parents[1] / "config.yaml")}
+    cfg["vision"] = {**cfg["vision"], "enabled": True}
+    store = pd.Store(str(tmp_path / "v.db"))
+    l = pd.parse_mp_listing({**mp("v1", "Pokemon binder met holo's", 15000), "pictures": [{"largeUrl": "//a.jpg"}]})
+    store.mark_eval(l.id, l.price_eur)
+    with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "x"}), \
+         mock.patch.object(pd, "vision_cards", side_effect=RuntimeError("503")):
+        for _ in range(4):
+            assert pd.evaluate_lot(l, cfg, store) is None
+    assert pd.VISION_RUN["fails"] == 3 and store.needs_eval(l.id, l.price_eur)
