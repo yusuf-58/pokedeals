@@ -1482,6 +1482,13 @@ def is_topdeal(d: Deal) -> bool:
     return d.profit >= 300
 
 
+REASONS: dict = {}
+
+
+def _why(r: str):
+    REASONS[r] = REASONS.get(r, 0) + 1
+
+
 def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                     deals: list, old: bool = False):
     PPT_STATE["old"] = old
@@ -1534,6 +1541,8 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         q = slab_query(l)
         if len(_name_words(q)) >= 2:
             card = {"name": q, "auto": True, "slab": True, "ebay_query": q}
+    if not card:
+        _why("niet herkend")
     if card:
         counts["id"] += 1
         v = get_values(card, cfg, store, bool(grade)) if not card.get("ebay_query") else Values()
@@ -1562,7 +1571,14 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                         v.psa9 = mv
                     v.sources = v.sources + [f"Marktplaats: mediaan van {n} dezelfde slabs"]
                     card = {**card, "mp_comps": True}
+        has_val = bool(v.raw if not grade else ({"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade) or v.grades.get(grade)))
+        if has_val:
+            counts["priced"] = counts.get("priced", 0) + 1
+        else:
+            _why("slab zonder prijs" if grade else "raw zonder prijs")
         d = evaluate(l, card, v, cfg)
+        if has_val and not d:
+            _why("niet goedkoop genoeg" if l.price_eur else "geen vraagprijs")
         if d and l.price_type != "FIXED" and cfg.get("check_bids", True):
             hb = fetch_highest_bid(l, store)
             if hb and hb > (l.price_eur or 0):
@@ -1606,6 +1622,7 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             if ok:
                 store.kv_set(f"rawcount:{day}", int(float(store.kv_get(f"rawcount:{day}", 0))) + 1)
             else:
+                _why("raw afgekeurd (strict)")
                 d = None
     if d and learned_block(store, d):
         log.info("Geleerd: overgeslagen (eerder als fout gemeld): %s", l.title[:60])
@@ -1681,7 +1698,8 @@ def run_once(cfg: dict, store: Store) -> list[Deal]:
     store.inc(day, "new", counts["new"]); store.inc(day, "identified", counts["id"])
     store.inc(day, "valued", counts["val"])
     log.info("Run klaar: %d bekeken (%d oud), %d herkend, %d met prijs, %d deals",
-             counts["new"], n_old, counts["id"], counts["val"], len(deals))
+             counts["new"], n_old, counts["id"], counts.get("priced", 0), len(deals))
+    log.info("Redenen: %s", ", ".join(f"{k}={v}" for k, v in sorted(REASONS.items(), key=lambda x: -x[1])))
     hour = int(cfg.get("daily_summary_hour", 21))
     if hour >= 0 and now.hour >= hour and not store.stats(day).get("summary_sent"):
         store.inc(day, "summary_sent")
