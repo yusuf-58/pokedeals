@@ -598,21 +598,38 @@ def test_learn_from_wrong_feedback(tmp_path):
     cfg = {**REAL_CFG, "discord": {"bot_token": "T", "channel_id": "1"}}
     msgs = [{"id": "m1", "embeds": [{"title": "Groudon Star", "description": "**Groudon XY Black Star Promos 52**\nx",
               "footer": {"text": "❌ Foute waarde (gemeld door Yusuf) - de bot leert hiervan"},
-              "fields": [{"name": "🔎 Prijsbron", "value": "Cardmarket (TCGdex)"}]}],
+              "fields": [{"name": "🔎 Prijsbron", "value": "Cardmarket (TCGdex)"}, {"name": "📈 Marktwaarde", "value": "€355.00"}]}],
              "components": [{"components": [{"custom_id": "wrong:abc"}]}]},
             {"id": "m2", "embeds": [{"footer": {"text": "✅ Yusuf heeft dit geclaimd"}}]}]
     r = mock.Mock(); r.raise_for_status = lambda: None; r.json = lambda: msgs
     with mock.patch.object(pd.requests, "get", return_value=r):
         assert pd.learn_from_discord(cfg, st) == 1
         assert pd.learn_from_discord(cfg, st) == 0            # niet dubbel
-    d = pd.Deal(pd.parse_mp_listing(mp("abc", "x", 100)), {"name": "x"}, "raw", None, 1, 2, 1, 1)
-    assert pd.learned_block(st, d)                             # zelfde advertentie
-    d2 = pd.Deal(pd.parse_mp_listing(mp("zzz", "Groudon XY Black Star Promos 52 NM", 100)),
-                 {"name": "Groudon Star"}, "raw", None, 1, 2, 1, 1)
-    assert pd.learned_block(st, d2)                            # zelfde soort koppeling
-    d3 = pd.Deal(pd.parse_mp_listing(mp("q", "Pikachu 25/102", 100)), {"name": "Pikachu"}, "raw", None, 1, 2, 1, 1,
-                 source="Cardmarket (TCGdex)")
-    assert not pd.learned_block(st, d3) and pd.learned_extra_pct(st, d3) == 10.0
+    # dezelfde foute waarde komt niet terug, een nieuwe (andere) waarde wel
+    d = pd.Deal(pd.parse_mp_listing(mp("abc", "x", 100)), {"name": "x"}, "raw", None, 1, 2, 1, 1, market=355.0)
+    assert pd.learned_block(st, d)
+    d.market = 180.0
+    assert not pd.learned_block(st, d)
+
+
+def test_wrong_value_forgets_prices(tmp_path):
+    st = pd.Store(tmp_path / "w.db")
+    card = {"name": "Charizard", "tcgdex_ids": ["base1-4"], "ppt_search": "Charizard 4"}
+    l = pd.parse_mp_listing(mp("L1", "Charizard 4/102 PSA 8", 50000))
+    st.cache_put("tcgdex:/cards/base1-4", {"x": 1}); st.cache_put("ppt:english:charizard 4", {"x": 1})
+    st.cache_put("tcgdex:/cards/base1-2", {"x": 1})
+    st.mark_eval("L1", 500)
+    pd.remember_sent(st, pd.Deal(l, card, "graded", "PSA 8", 1, 2, 1, 1, market=900.0, source="eBay"))
+    msgs = [{"id": "w1", "embeds": [{"title": "Charizard", "footer": {"text": "❌ Foute waarde"},
+             "fields": [{"name": "📈 Marktwaarde", "value": "€900.00"}]}],
+             "components": [{"components": [{"custom_id": "wrong:L1"}]}]}]
+    r = mock.Mock(); r.raise_for_status = lambda: None; r.json = lambda: msgs
+    with mock.patch.dict(os.environ, {"DISCORD_BOT_TOKEN": "t", "DISCORD_CHANNEL_ID": "c"}), \
+         mock.patch.object(pd.requests, "get", return_value=r):
+        assert pd.learn_from_discord({}, st) == 1
+    assert st.cache_get("tcgdex:/cards/base1-4") is None and st.cache_get("ppt:english:charizard 4") is None
+    assert st.cache_get("tcgdex:/cards/base1-2") is not None      # andere kaarten blijven
+    assert st.needs_eval("L1", 500)                                # wordt opnieuw bekeken
 
 
 def test_hash_number_with_set(tmp_path):

@@ -94,6 +94,7 @@ class Store:
         self.db.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
         self.db.execute("CREATE TABLE IF NOT EXISTS slabs (id TEXT PRIMARY KEY, grade TEXT, toks TEXT, price REAL, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS bad (lid TEXT PRIMARY KEY, card TEXT, toks TEXT, source TEXT, ts REAL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS wrong (lid TEXT PRIMARY KEY, card TEXT, toks TEXT, market REAL, source TEXT, ts REAL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, score REAL, kind TEXT, data TEXT, ts REAL)")
         self.db.commit()
         self.fresh_init()
@@ -1500,6 +1501,12 @@ def send_deal_bot(token: str, channel: str, d: Deal, cfg: dict):
         raise RuntimeError(f"Discord {r.status_code}: {hints.get(r.status_code, '')} | {r.text[:200]}")
 
 
+def remember_sent(store: Store, d: Deal):
+    """Onthoud welke kaart/waarde we stuurden, zodat 'Foute waarde' precies die prijzen kan vergeten."""
+    store.kv_set(f"dealinfo:{d.listing.id}", json.dumps(
+        {"card": d.card, "market": d.market, "source": d.source, "title": d.listing.title}, default=str))
+
+
 def send_deal(cfg: dict, d: Deal):
     """Deal versturen: Discord-bot met knoppen, anders webhook/ntfy."""
     token = os.getenv("DISCORD_BOT_TOKEN") or (cfg.get("discord") or {}).get("bot_token")
@@ -1730,6 +1737,7 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             d = None
         if d and is_topdeal(d) and cfg.get("instant_topdeals", True):
             try:
+                remember_sent(store, d)
                 send_deal(cfg, d)
             except Exception as e:
                 log.error("Melding mislukt: %s", e)
@@ -1848,12 +1856,12 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                 _why("raw afgekeurd (strict)")
                 d = None
     if d and learned_block(store, d):
-        log.info("Geleerd: overgeslagen (eerder als fout gemeld): %s", l.title[:60])
+        log.info("Weer dezelfde foute waarde als gemeld, overgeslagen: %s", l.title[:60])
         d = None
     if d and d.market and cfg.get("only_below_market", False):
-        need = float(cfg.get("min_below_market_pct", 15)) + learned_extra_pct(store, d)
+        need = float(cfg.get("min_below_market_pct", 15))
         if (1 - l.price_eur / d.market) * 100 < need:
-            log.info("Geleerd: te weinig onder marktwaarde voor bron %s (nodig %.0f%%)", source_kind(d.source), need)
+            _why("niet genoeg onder marktwaarde")
             d = None
     if d:
         if old:
@@ -1864,6 +1872,7 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
         log.info("DEAL%s: %s", " (oud)" if old else "", format_deal(d)[0])
         if is_topdeal(d) and cfg.get("instant_topdeals", True):
             try:
+                remember_sent(store, d)
                 send_deal(cfg, d)
             except Exception as e:
                 log.error("Melding mislukt: %s", e)
@@ -1944,8 +1953,31 @@ def source_kind(src: str) -> str:
     return "overig" if s_ else "onbekend"
 
 
+def _jacc(a: set, b: set) -> float:
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+def forget_values(store: Store, card: dict, title: str, lid: str):
+    """Foute waarde: gooi de opgeslagen prijzen voor deze kaart weg, zodat de bot opnieuw (vers) opzoekt."""
+    keys = [i for i in (card.get("tcgdex_ids") or []) if i] + ([card["pokemontcg_id"]] if card.get("pokemontcg_id") else [])
+    for k in keys:
+        store.db.execute("DELETE FROM prices WHERE key LIKE ?", (f"%{k}%",))
+    for q in {(card.get("ppt_search") or "").lower(), (card.get("pc_query") or "").lower(), (card.get("name") or "").lower()}:
+        if q:
+            store.db.execute("DELETE FROM prices WHERE key IN (?,?,?) OR key LIKE ? OR key LIKE ?",
+                             (f"ppt:english:{q}", f"ppt:japanese:{q}", f"pc:{q}", f"ebay:%:{q}", f"val:%{card.get('name', '')}"))
+    # vergelijkbare Marktplaats-advertenties (comps) die de waarde bepaalden ook weg
+    me = set(slab_tokens(title))
+    for sid, toks in store.db.execute("SELECT id, toks FROM slabs").fetchall():
+        if sid == lid or _jacc(me, set((toks or "").split())) >= 0.6:
+            store.db.execute("DELETE FROM slabs WHERE id=?", (sid,))
+    store.db.execute("DELETE FROM queue WHERE id LIKE ?", (f"%:{lid}",))
+    store.db.execute("DELETE FROM evaluated WHERE id=?", (lid,))       # volgende run opnieuw bekijken
+    store.db.commit()
+
+
 def learn_from_discord(cfg: dict, store: Store):
-    """Lees 'Foute waarde'-meldingen uit Discord en onthoud ze."""
+    """'Foute waarde' geklikt: die waarde vergeten en de kaart opnieuw (vers) laten waarderen."""
     token = os.getenv("DISCORD_BOT_TOKEN") or (cfg.get("discord") or {}).get("bot_token")
     channel = os.getenv("DISCORD_CHANNEL_ID") or (cfg.get("discord") or {}).get("channel_id")
     if not token or not channel:
@@ -1970,38 +2002,40 @@ def learn_from_discord(cfg: dict, store: Store):
             for c in row.get("components") or []:
                 if str(c.get("custom_id", "")).startswith("wrong:"):
                     lid = c["custom_id"].split(":", 1)[1]
+        lid = lid or str(m.get("id"))
+        fields = {f.get("name", ""): f.get("value", "") for f in emb.get("fields") or []}
+        src = next((v for k, v in fields.items() if "Prijsbron" in k), "")
+        mv = next((v for k, v in fields.items() if "Marktwaarde" in k), "")
+        mm = re.search(r"(\d+(?:\.\d+)?)", mv.replace(",", "")) if mv else None
+        market = float(mm.group(1)) if mm else None
+        info = json.loads(store.kv_get(f"dealinfo:{lid}") or "{}")
         desc = emb.get("description") or ""
-        title_line = desc.split("\n")[0].strip("* ")
-        src = next((f.get("value", "") for f in emb.get("fields") or [] if "Prijsbron" in f.get("name", "")), "")
-        store.db.execute("INSERT OR REPLACE INTO bad VALUES (?,?,?,?,?)",
-                         (lid or m.get("id"), emb.get("title") or "", " ".join(sorted(set(slab_tokens(title_line)))),
-                          source_kind(src), time.time()))
+        title = info.get("title") or desc.split("\n")[0].strip("* ")
+        card = info.get("card") or {"name": emb.get("title") or ""}
+        market = info.get("market") or market
+        forget_values(store, card, title, lid)
+        store.db.execute("INSERT OR REPLACE INTO wrong VALUES (?,?,?,?,?,?)",
+                         (lid, card.get("name", ""), " ".join(sorted(set(slab_tokens(title)))), market,
+                          source_kind(info.get("source") or src), time.time()))
         store.kv_set(f"fb:{m.get('id')}", 1)
         n += 1
+        log.info("Foute waarde (€%s) vergeten voor %s: opnieuw opzoeken", market, title[:50])
     if n:
         store.db.commit()
-        log.info("Geleerd van %d 'Foute waarde'-meldingen", n)
     return n
 
 
 def learned_block(store: Store, d: Deal) -> bool:
-    """Lijkt deze deal op een eerder gemelde foute waarde? (zelfde advertentie of zelfde koppeling)"""
-    if store.db.execute("SELECT 1 FROM bad WHERE lid=?", (d.listing.id,)).fetchone():
-        return True
+    """Alleen tegenhouden als de NIEUWE waarde weer (bijna) dezelfde foute waarde is."""
+    if not d.market:
+        return False
     me = set(slab_tokens(d.listing.title))
-    for card, toks in store.db.execute("SELECT card, toks FROM bad WHERE card=?", (d.card.get("name", ""),)):
-        other = set(toks.split())
-        if me and other and len(me & other) / len(me | other) >= 0.6:
+    for lid, toks, market in store.db.execute("SELECT lid, toks, market FROM wrong WHERE ts>?",
+                                              (time.time() - 30 * 86400,)).fetchall():
+        same = lid == d.listing.id or _jacc(me, set((toks or "").split())) >= 0.6
+        if same and market and abs(d.market - market) / market < 0.15:
             return True
     return False
-
-
-def learned_extra_pct(store: Store, d: Deal) -> float:
-    """Elke foute melding voor deze prijsbron = 10% strenger (max 40%)."""
-    kind = source_kind(d.source)
-    n = store.db.execute("SELECT COUNT(*) FROM bad WHERE source=? AND ts>?",
-                         (kind, time.time() - 30 * 86400)).fetchone()[0]
-    return min(40.0, 10.0 * n)
 
 
 def flush_queue(cfg: dict, store: Store, force: bool = False):
@@ -2027,7 +2061,9 @@ def flush_queue(cfg: dict, store: Store, force: bool = False):
     for kind, data in items:
         try:
             if kind in ("deal", "slab"):
-                send_deal(cfg, _deal_from_dict(data))
+                dd = _deal_from_dict(data)
+                remember_sent(store, dd)
+                send_deal(cfg, dd)
             else:
                 send_bid_chance(cfg, Listing(**data["listing"]), data["card"], data["b"])
         except Exception as e:
