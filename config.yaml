@@ -125,6 +125,14 @@ vision:
 # Rustig houden: deals worden verzameld en elke `batch_minutes` krijg je de beste `batch_size`.
 batch_minutes: 30
 batch_size: 3
+# Ondergrens voor slabs zonder eigen prijs: slab is minstens raw-prijs x factor waard (voorzichtig)
+slab_floor:
+  "PSA 10": 1.0
+  "CGC 10": 1.0
+  "BGS 10": 1.0
+  "BGS 9.5": 1.0
+  "TAG 10": 1.0
+  "PSA 9": 0.8
 raw_deals: "strict"          # true = alle raw, false = geen raw, "strict" = alleen topkwaliteit raw
 raw_strict:
   min_below_pct: 25          # minimaal 25% onder de marktwaarde

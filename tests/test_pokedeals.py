@@ -667,3 +667,20 @@ def test_ppt_saved_for_new(tmp_path):
         pd.ppt_card("a", cfg, st, "english"); pd.PPT_STATE["old"] = True
         assert pd.ppt_card("a", cfg, st, "english")["name"] == "A" and g.call_count == 1   # cache mag wel
     pd.PPT_STATE["old"] = False
+
+
+def test_slab_floor_from_raw():
+    cfg = {**REAL_CFG, "only_below_market": True, "min_below_market_pct": 15, "min_profit_below": 25,
+           "batch_minutes": 0, "instant_topdeals": False, "slab_floor": {"PSA 10": 1.0, "PSA 9": 0.8}}
+    card = {"name": "Mew ex 232/091", "tcgdex_ids": ["sv4pt5-232"], "auto": True}
+    st = pd.Store(":memory:")
+    def run(title, price, lid):
+        out = []
+        with mock.patch.object(pd, "match_card", return_value=card), \
+             mock.patch.object(pd, "get_values", return_value=pd.Values(raw=800, sources=["Cardmarket (TCGdex)"])):
+            pd.process_listing(pd.parse_mp_listing(mp(lid, title, price)), cfg, st, "d", {"new": 0, "id": 0, "val": 0}, out)
+        return out
+    d = run("Mew ex 232/091 PSA 10", 50000, "a")
+    assert d and d[0].market == 800 and "Ondergrens" in d[0].source
+    assert run("Mew ex 232/091 PSA 10", 75000, "b") == []      # maar 6% onder
+    assert run("Mew ex 232/091 PSA 8", 30000, "c") == []       # PSA 8: geen ondergrens

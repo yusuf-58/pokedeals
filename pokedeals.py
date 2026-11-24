@@ -1571,6 +1571,17 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
                         v.psa9 = mv
                     v.sources = v.sources + [f"Marktplaats: mediaan van {n} dezelfde slabs"]
                     card = {**card, "mp_comps": True}
+        # Ondergrens voor slabs: topcijfer is minstens ~raw NM waard (Cardmarket, gratis via TCGdex)
+        floors = cfg.get("slab_floor") or {}
+        if grade and grade in floors and v.raw and not (
+                {"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade) or v.grades.get(grade)):
+            fv = round(v.raw * float(floors[grade]), 2)
+            v.grades = {**v.grades, grade: fv}
+            if grade == "PSA 10":
+                v.psa10 = fv
+            elif grade == "PSA 9":
+                v.psa9 = fv
+            v.sources = v.sources + [f"Ondergrens: raw Cardmarket x{floors[grade]} (echte {grade}-waarde is meestal hoger)"]
         has_val = bool(v.raw if not grade else ({"PSA 10": v.psa10, "PSA 9": v.psa9}.get(grade) or v.grades.get(grade)))
         if has_val:
             counts["priced"] = counts.get("priced", 0) + 1
