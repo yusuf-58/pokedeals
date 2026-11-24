@@ -100,7 +100,7 @@ class Store:
 
     def fresh_init(self):
         if self.is_empty() and self.kv_get("queue_version") is None:
-            self.kv_set("queue_version", "3")
+            self.kv_set("queue_version", "4")
 
     def needs_eval(self, lid: str, price, recheck_hours: float = 12) -> bool:
         row = self.db.execute("SELECT price, ts FROM evaluated WHERE id=?", (lid,)).fetchone()
@@ -290,7 +290,8 @@ try:
     from rapidfuzz import fuzz as _fuzz
 
     def similar(a: str, b: str) -> float:
-        return _fuzz.token_set_ratio(a, b)
+        # token_sort: beide titels moeten echt op elkaar lijken ("Destined Rivals" != "Destined Rivals case 10x")
+        return _fuzz.token_sort_ratio(a, b)
 except ImportError:                                    # werkt ook zonder rapidfuzz (minder slim)
     import difflib
 
@@ -629,6 +630,7 @@ def remember_slab(l: Listing, grade: str, store: Store):
 
 
 SEALED_TYPES = [
+    ("TIN", r"\bmini\s*tins?\b|\btins?\b"),
     ("UPC", r"ultra[\s-]*premium|\bupc\b"),
     ("ETB", r"elite\s*trainer\s*box|\betb\b"),
     ("BOOSTER BOX", r"booster\s*(?:box|display|doos)|\bdisplay\b|36\s*(?:boosters|packs)"),
@@ -636,7 +638,6 @@ SEALED_TYPES = [
     ("PREMIUM COLLECTION", r"premium\s*collection"),
     ("COLLECTION BOX", r"collection\s*box|\bcollectie\s*box"),
     ("BLISTER", r"blister|checklane"),
-    ("TIN", r"\btin\b"),
     ("BOOSTER PACK", r"booster\s*pack|\bbooster\b"),
 ]
 SEALED_WORDS = {"sealed", "geseald", "seal", "nieuw", "new", "ongeopend", "factory", "box", "boxes", "display",
@@ -645,8 +646,14 @@ SEALED_WORDS = {"sealed", "geseald", "seal", "nieuw", "new", "ongeopend", "facto
                 "tcg", "scarlet", "violet", "sword", "shield", "sv", "swsh", "the", "and", "van", "met"}
 
 
+MULTI_RE = re.compile(r"\b(case|cases|\d+\s*x\b|x\s*\d+\b|\d+\s*(?:stuks|st\.?|boxes|displays|etbs|tins)\b|"
+                      r"per\s*stuk|bundel|lot|meerdere|verschillende|collectie|half\s*case)\b", re.I)
+
+
 def detect_sealed(l: Listing) -> str | None:
     t = l.text
+    if MULTI_RE.search(l.title):
+        return None                                   # meerdere stuks/case: geen eerlijke vergelijking
     if any(w in t for w in SEALED_BAD) or BAD_COND_RE.search(t) or detect_grade(t):
         return None
     if not re.search(r"seal|geseald|ongeopend|nieuw|new|booster|elite trainer|\betb\b|display|bundle|collection", t):
@@ -667,7 +674,7 @@ def sealed_tokens(title: str) -> list[str]:
 def remember_sealed(l: Listing, kind: str, store: Store):
     if not l.price_eur or l.price_eur < 5 or l.price_type != "FIXED":
         return
-    if re.search(r"\b(\d+\s*x|lot|bundel van|set van|stuks)\b", l.text):
+    if MULTI_RE.search(l.title):
         return
     toks = sealed_tokens(l.title)
     if toks:
@@ -686,11 +693,17 @@ def marktplaats_sealed_value(l: Listing, kind: str, store: Store, cfg: dict) -> 
                             (grade, time.time() - float(cfg.get("comps_days", 14)) * 86400, l.id)).fetchall()
     me_s = " ".join(sorted(me))
     thr = float(cfg.get("fuzzy_sealed", 90))
-    prices = [p for toks, p in rows if similar(me_s, " ".join(sorted(set(toks.split())))) >= thr]
+    variant = lambda ts: frozenset(w for w in ts if w in ("center", "pc", "exclusive", "japans", "japanese", "mini", "case"))
+    prices = [p for toks, p in rows
+              if variant(set(toks.split())) == variant(me)
+              and similar(me_s, " ".join(sorted(set(toks.split())))) >= thr]
     n = len(prices)
     if n < int(cfg.get("mp_comps_min", 3)):
         return None, n
     prices.sort()
+    q1, q3 = prices[n // 4], prices[(3 * n) // 4]
+    if q1 <= 0 or q3 / q1 > float(cfg.get("comps_max_spread", 1.8)):
+        return None, n                                   # prijzen lopen te ver uiteen
     return round(prices[n // 2] if n % 2 else (prices[n // 2 - 1] + prices[n // 2]) / 2, 2), n
 
 
@@ -1236,6 +1249,9 @@ def evaluate(listing: Listing, card: dict, v: Values, cfg: dict) -> Deal | None:
         profit = sell - buy
         margin = profit / buy * 100 if buy else 0
         if too_expensive(cfg, profit, margin, listing.price_eur, v.raw):
+            return None
+        if card.get("src") and margin > float(cfg.get("max_margin_pct", 300)) / 2:
+            log.info("Overgeslagen sealed (marge %.0f%% = waarschijnlijk ander product): %s", margin, listing.title[:60])
             return None
         return Deal(listing, card, "sealed", None, round(buy, 2), round(sell, 2),
                     round(profit, 2), round(margin, 1), "📦 Sealed: check of de seal echt intact is!", round(v.raw, 2))
@@ -1886,9 +1902,11 @@ def flush_queue(cfg: dict, store: Store, force: bool = False):
     last = float(store.kv_get("last_flush", 0))
     if not force and time.time() - last < every:
         return 0
-    if store.kv_get("queue_version") != "3":           # oude (foute) wachtrij weggooien na regelwijziging
-        store.db.execute("DELETE FROM queue"); store.db.commit()
-        store.kv_set("queue_version", "3")
+    if store.kv_get("queue_version") != "4":           # oude (foute) wachtrij weggooien na regelwijziging
+        store.db.execute("DELETE FROM queue")
+        store.db.execute("DELETE FROM slabs WHERE grade LIKE 'SEALED%'")   # sealed opnieuw opbouwen, zonder cases
+        store.db.commit()
+        store.kv_set("queue_version", "4")
         return 0
     store.kv_set("last_flush", time.time())
     if cfg.get("raw_deals", True) is False:

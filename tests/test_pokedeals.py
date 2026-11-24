@@ -529,7 +529,7 @@ def test_sealed_comps_and_message(tmp_path):
         pd.remember_sealed(l, "ETB", st)
     assert pd.detect_sealed(pd.parse_mp_listing(mp("x", "Lege 151 elite trainer box", 1000))) is None
     assert pd.detect_sealed(pd.parse_mp_listing(mp("y", "Charizard 4/102 holo", 1000))) is None
-    cheap = pd.parse_mp_listing(mp("c", "151 ETB elite trainer box nieuw", 2000))
+    cheap = pd.parse_mp_listing(mp("c", "151 ETB elite trainer box nieuw", 12000))
     v, n = pd.marktplaats_sealed_value(cheap, "ETB", st, REAL_CFG)
     assert n == 4 and v == 195.0
     counts = {"new": 0, "id": 0, "val": 0}; deals = []
@@ -540,7 +540,7 @@ def test_sealed_comps_and_message(tmp_path):
     emb = pd.deal_embed(deals[0], cfg)
     names = [f["name"] for f in emb["fields"]]
     assert "📉 Onder marktwaarde" in names and not any("bod" in n.lower() for n in names)
-    assert "voor €20" in pd.seller_message(deals[0], 0, cfg)
+    assert "voor €120" in pd.seller_message(deals[0], 0, cfg)
 
 
 def test_only_below_market():
@@ -710,3 +710,13 @@ def test_fuzzy_sealed_comps(tmp_path):
     pd.remember_sealed(pd.parse_mp_listing(mp("x", "Prismatic Evolutions elite trainer box", 9000)), "ETB", st)
     v, n = pd.marktplaats_sealed_value(pd.parse_mp_listing(mp("c", "151 elite trainer box sealed", 9000)), "ETB", st, REAL_CFG)
     assert n == 4 and v == 200.0                         # Prismatic telt niet mee
+
+
+def test_sealed_case_not_compared(tmp_path):
+    st = pd.Store(tmp_path / "cs.db")
+    assert pd.detect_sealed(pd.parse_mp_listing(mp("c", "Destined Rivals ETB case 10x sealed", 100000))) is None
+    assert pd.detect_sealed(pd.parse_mp_listing(mp("t", "151 Mini Tins sealed", 1500))) == "TIN"
+    for i in range(4):
+        pd.remember_sealed(pd.parse_mp_listing(mp(f"p{i}", "Destined Rivals Pokemon Center ETB sealed", 25000)), "ETB", st)
+    v, n = pd.marktplaats_sealed_value(pd.parse_mp_listing(mp("x", "Destined Rivals ETB sealed", 7000)), "ETB", st, REAL_CFG)
+    assert v is None                                     # Pokemon Center-ETB is ander product
