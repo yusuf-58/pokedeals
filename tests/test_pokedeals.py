@@ -754,3 +754,17 @@ def test_gemini_model_fallback():
         assert pd.vision_cards(l, cfg) == {"cards": [], "looks_fake": False}
     assert "gemini-3.0-flash:generateContent" in p.call_args[0][0]
     pd.GEMINI_MODEL[0] = None
+
+
+def test_gemini_503_retry():
+    pd.GEMINI_MODEL[0] = None
+    cfg = {"vision": {"provider": "gemini", "gemini_api_key": "k", "model": "gemini-flash-latest"}}
+    l = pd.Listing("1", "t", "", 50, "FIXED", "u", images=["https://x/a.jpg"])
+    img = mock.Mock(content=b"abc", headers={"content-type": "image/jpeg"}); img.raise_for_status = lambda: None
+    busy = mock.Mock(status_code=503)
+    ok = mock.Mock(status_code=200); ok.raise_for_status = lambda: None
+    ok.json = lambda: {"candidates": [{"content": {"parts": [{"text": '{"cards": []}'}]}}]}
+    with mock.patch.object(pd.requests, "get", return_value=img), \
+         mock.patch.object(pd.requests, "post", side_effect=[busy, busy, ok]) as p, mock.patch.object(pd.time, "sleep"):
+        assert pd.vision_cards(l, cfg) == {"cards": []}
+    assert "flash-lite" in p.call_args[0][0]

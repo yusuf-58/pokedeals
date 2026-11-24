@@ -1020,6 +1020,13 @@ def vision_cards(listing: Listing, cfg: dict) -> dict | None:
             GEMINI_MODEL[0] = model
             r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                               params={"key": key}, timeout=60, json=body)
+        # overbelast (503) of te snel (429): even wachten, dan lichter model proberen
+        for alt in (model, "gemini-flash-lite-latest"):
+            if r.status_code not in (429, 500, 503):
+                break
+            time.sleep(4)
+            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{alt}:generateContent",
+                              params={"key": key}, timeout=60, json=body)
         if r.status_code == 429:
             log.warning("Gemini gratis limiet bereikt, even wachten")
             return None
