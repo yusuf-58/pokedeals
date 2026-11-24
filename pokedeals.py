@@ -1125,12 +1125,13 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
     is_coll = bool(COLLECTION_RE.search(listing.text))
     if PPT_STATE["old"] and vc.get("new_only", True) and not is_coll:
         return None                                   # AI-tegoed alleen voor nieuwe advertenties (verzamelingen altijd)
-    if not vision_quota_ok(cfg, store):
-        _why("foto-AI daglimiet")
-        return None
     if VISION_RUN["fails"] >= 3 or VISION_RUN["calls"] >= int(vc.get("max_per_run", 25)):
         store.unmark_eval(listing.id)                 # volgende run opnieuw proberen
         _why("foto-AI uitgesteld")
+        return None
+    if not vision_quota_ok(cfg, store):
+        store.unmark_eval(listing.id)
+        _why("foto-AI daglimiet")
         return None
     _why("foto-AI gebruikt")
     VISION_RUN["calls"] += 1
@@ -1140,6 +1141,8 @@ def evaluate_lot(listing: Listing, cfg: dict, store: Store) -> Deal | None:
     except Exception as e:
         VISION_RUN["fails"] += 1
         store.unmark_eval(listing.id)
+        qk = f"visionq:{time.strftime('%Y-%m-%d')}"     # mislukte poging telt niet mee
+        store.kv_set(qk, max(0, int(float(store.kv_get(qk, 1))) - 1))
         log.warning("vision fout: %s", e)
         return None
     if not res or res.get("looks_fake"):
