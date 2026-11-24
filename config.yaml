@@ -77,7 +77,7 @@ usd_to_eur: 0.92         # omrekening voor eBay-prijzen in dollars
 # Modus 'onder marktwaarde': elke advertentie waarvan de vraagprijs onder de marktwaarde ligt.
 # (min_profit/min_margin hieronder tellen dan niet). De beste komen eerst in je batch.
 only_below_market: true
-min_below_market_pct: 15     # minimaal 15% onder de marktwaarde
+min_below_market_pct: 10     # minimaal 10% onder de marktwaarde
 min_profit_below: 25         # en minimaal €25 echte winst na alle kosten
 min_profit_eur: 150      # minimaal zoveel netto winst (na alle kosten)
 min_margin_pct: 10       # en minimaal zoveel % winst op je inkoop
@@ -118,7 +118,7 @@ vision:
   gemini_api_key: ""
   model: "gemini-2.5-flash"   # check in AI Studio welke Flash-modellen gratis zijn
   max_images: 3               # foto's per advertentie
-  max_per_day: 200            # blijf onder de gratis daglimiet
+  max_per_day: 6             # maximaal 6 raw deals per dag
   min_listing_price: 10       # goedkopere advertenties niet scannen
   min_confidence: 0.75        # AI moet zo zeker zijn
 
@@ -135,10 +135,10 @@ slab_floor:
   "PSA 9": 0.8
 raw_deals: "strict"          # true = alle raw, false = geen raw, "strict" = alleen topkwaliteit raw
 raw_strict:
-  min_below_pct: 25          # minimaal 25% onder de marktwaarde
+  min_below_pct: 20          # raw: minimaal 20% onder de marktwaarde
   min_profit: 40             # minimaal €40 echte winst
   require_condition: true    # verkoper moet NM / near mint / mint / top staat noemen
-  max_per_day: 4             # maximaal 4 raw deals per dag
+  max_per_day: 6             # maximaal 6 raw deals per dag
 slab_share: 0.9              # 90% slabs; raw alleen als er geen slabs genoeg zijn
 slab_title_matching: true    # slabs ook zonder kaartnummer herkennen (via pokemonpricetracker)
 queue_max_age_hours: 3       # oudere deals uit de wachtrij vallen weg
