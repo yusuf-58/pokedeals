@@ -118,7 +118,7 @@ vision:
   gemini_api_key: ""
   model: "gemini-2.5-flash"   # check in AI Studio welke Flash-modellen gratis zijn
   max_images: 3               # foto's per advertentie
-  max_per_day: 6             # maximaal 6 raw deals per dag
+  max_per_day: 200            # blijf onder de gratis daglimiet
   min_listing_price: 10       # goedkopere advertenties niet scannen
   min_confidence: 0.75        # AI moet zo zeker zijn
 
