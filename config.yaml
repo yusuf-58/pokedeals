@@ -171,6 +171,8 @@ raw_strict:
   min_profit: 50             # raw: minimaal €50 echte winst
   require_condition: true    # verkoper moet NM / near mint / mint / top staat noemen
   max_per_day: 6             # maximaal 6 raw deals per dag
+sealed_per_batch: 1          # max 1 sealed per batch
+sealed_instant_profit: 250   # sealed alleen direct sturen bij €250+ winst
 slab_share: 0.9              # 90% slabs; raw alleen als er geen slabs genoeg zijn
 slab_title_matching: true    # slabs ook zonder kaartnummer herkennen (via pokemonpricetracker)
 queue_max_age_hours: 3       # oudere deals uit de wachtrij vallen weg

@@ -401,7 +401,7 @@ def test_batch_mode(tmp_path):
     store = pd.Store(tmp_path / "q.db")
     cfg = {**CFG, "searches": ["p"], "backfill_pages": 0, "daily_summary_hour": -1,
            "batch_size": 2, "batch_minutes": 30, "topdeal_profit": 100000}
-    ls = [pd.parse_mp_listing(mp(f"m{i}", "Moonbreon", 70000 + i * 1000)) for i in range(4)]
+    ls = [pd.parse_mp_listing(mp(f"m{i}", f"Moonbreon {i}", 70000 + i * 1000)) for i in range(4)]
     top = pd.parse_mp_listing(mp("top", "Moonbreon", 30000))
     sent = []
     with mock.patch.object(pd, "fetch_marktplaats", return_value=ls + [top]), \
@@ -805,3 +805,21 @@ def test_vision_breaker_retries_later(tmp_path):
         for _ in range(4):
             assert pd.evaluate_lot(l, cfg, store) is None
     assert pd.VISION_RUN["fails"] == 3 and store.needs_eval(l.id, l.price_eur)
+
+
+def test_no_repost_and_sealed_cap(tmp_path):
+    st = pd.Store(tmp_path / "d.db")
+    l = pd.parse_mp_listing(mp("r1", "Umbreon VMAX 215/203 PSA 10", 100000))
+    d = pd.Deal(l, {"name": "Umbreon"}, "graded", "PSA 10", 1, 2, 300, 30, market=1500.0)
+    assert not pd.dup_sent(st, d)
+    pd.remember_sent(st, d)
+    assert pd.dup_sent(st, d)                                   # zelfde advertentie: niet opnieuw
+    relist = pd.parse_mp_listing(mp("r2", "Umbreon VMAX 215/203 PSA 10", 99000))
+    assert pd.dup_sent(st, pd.Deal(relist, {}, "graded", "PSA 10", 1, 2, 1, 1))   # opnieuw geplaatst
+    cheaper = pd.parse_mp_listing(mp("r1", "Umbreon VMAX 215/203 PSA 10", 80000))
+    assert not pd.dup_sent(st, pd.Deal(cheaper, {}, "graded", "PSA 10", 1, 2, 1, 1))  # 20% goedkoper: wel
+    for i in range(3):
+        st.enqueue(f"s{i}", 500 - i, "sealed", {"i": i})
+    st.enqueue("d1", 100, "deal", {"i": "d"})
+    got = st.take_best(3, 3, 0.9, 1)
+    assert [k for k, _ in got].count("sealed") == 1 and len(got) == 2

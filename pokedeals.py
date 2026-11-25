@@ -124,13 +124,25 @@ class Store:
                         (qid, score, kind, json.dumps(data, default=str), time.time()))
         self.db.commit()
 
-    def take_best(self, n: int, max_age_h: float, slab_share: float = 0.0) -> list:
+    def take_best(self, n: int, max_age_h: float, slab_share: float = 0.0, sealed_max: int = 1) -> list:
         self.db.execute("DELETE FROM queue WHERE ts < ?", (time.time() - max_age_h * 3600,))
         n_slab = n if slab_share >= 0.85 else round(n * slab_share)   # 90%: alles slabs als die er zijn
         rows = self.db.execute("SELECT id, kind, data FROM queue WHERE kind='slab' ORDER BY score DESC LIMIT ?",
                                (n_slab,)).fetchall()
-        rows += self.db.execute("SELECT id, kind, data FROM queue WHERE id NOT IN (%s) ORDER BY score DESC LIMIT ?"
-                                % ",".join("?" * len(rows)), [r[0] for r in rows] + [n - len(rows)]).fetchall()
+        left = n - len(rows)
+        if left > 0:
+            ex = [r[0] for r in rows]
+            rest = self.db.execute("SELECT id, kind, data FROM queue WHERE id NOT IN (%s) ORDER BY score DESC"
+                                   % ",".join("?" * len(ex)), ex).fetchall()
+            ns = 0
+            for r in rest:                                   # sealed: max `sealed_max` per batch
+                if r[1] == "sealed":
+                    if ns >= sealed_max:
+                        continue
+                    ns += 1
+                rows.append(r)
+                if len(rows) >= n:
+                    break
         for r in rows:
             self.db.execute("DELETE FROM queue WHERE id=?", (r[0],))
         self.db.commit()
@@ -1505,6 +1517,31 @@ def remember_sent(store: Store, d: Deal):
     """Onthoud welke kaart/waarde we stuurden, zodat 'Foute waarde' precies die prijzen kan vergeten."""
     store.kv_set(f"dealinfo:{d.listing.id}", json.dumps(
         {"card": d.card, "market": d.market, "source": d.source, "title": d.listing.title}, default=str))
+    store.kv_set(f"sent:{d.listing.id}", d.listing.price_eur)
+    store.kv_set(f"sentt:{_ad_key(d.listing)}", f"{d.listing.price_eur}|{time.time()}")
+
+
+def _title_key(t: str) -> str:
+    return " ".join(sorted(set(re.findall(r"[a-z0-9]+", (t or "").lower()))))[:200]
+
+
+def _ad_key(l: Listing) -> str:
+    """Zelfde advertentie (opnieuw geplaatst): zelfde titel + plaats + begin van de tekst."""
+    return _title_key(f"{l.title} {l.city} {(l.description or '')[:120]}")
+
+
+def dup_sent(store: Store, d: Deal) -> bool:
+    """Al eerder gestuurd? Alleen opnieuw als de prijs minstens 10% lager is (of na 'Foute waarde')."""
+    p = d.listing.price_eur or 0
+    was = store.kv_get(f"sent:{d.listing.id}")
+    if was is not None and p > float(was) * 0.9:
+        return True
+    tk = store.kv_get(f"sentt:{_ad_key(d.listing)}")       # zelfde advertentie opnieuw geplaatst
+    if tk:
+        tp, ts = (float(x) for x in tk.split("|"))
+        if time.time() - ts < 14 * 86400 and p > tp * 0.9:
+            return True
+    return False
 
 
 def send_deal(cfg: dict, d: Deal):
@@ -1735,7 +1772,10 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             d.source = ", ".join(v.sources)
         if d and learned_block(store, d):
             d = None
-        if d and is_topdeal(d) and cfg.get("instant_topdeals", True):
+        if d and dup_sent(store, d):
+            _why("al eerder gestuurd")
+            d = None
+        if d and d.profit >= float(cfg.get("sealed_instant_profit", 250)) and cfg.get("instant_topdeals", True):
             try:
                 remember_sent(store, d)
                 send_deal(cfg, d)
@@ -1744,7 +1784,7 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             deals.append(d); store.inc(day, "deals")
             return
         if d:
-            store.enqueue("deal:" + l.id, d.profit, "slab", _deal_to_dict(d))   # sealed telt mee als 'top'
+            store.enqueue("deal:" + l.id, d.profit, "sealed", _deal_to_dict(d))   # sealed: max 1 per batch
             deals.append(d)
             store.inc(day, "deals")
             log.info("DEAL sealed: %s", format_deal(d)[0])
@@ -1855,6 +1895,9 @@ def process_listing(l: Listing, cfg: dict, store: Store, day: str, counts: dict,
             else:
                 _why("raw afgekeurd (strict)")
                 d = None
+    if d and dup_sent(store, d):
+        _why("al eerder gestuurd")
+        d = None
     if d and learned_block(store, d):
         log.info("Weer dezelfde foute waarde als gemeld, overgeslagen: %s", l.title[:60])
         d = None
@@ -1973,6 +2016,8 @@ def forget_values(store: Store, card: dict, title: str, lid: str):
             store.db.execute("DELETE FROM slabs WHERE id=?", (sid,))
     store.db.execute("DELETE FROM queue WHERE id LIKE ?", (f"%:{lid}",))
     store.db.execute("DELETE FROM evaluated WHERE id=?", (lid,))       # volgende run opnieuw bekijken
+    store.db.execute("DELETE FROM kv WHERE k=?", (f"sent:{lid}",))
+    store.db.execute("DELETE FROM kv WHERE k LIKE 'sentt:%' AND k LIKE ?", (f"%{_title_key(title)[:40]}%",))
     store.db.commit()
 
 
@@ -2057,11 +2102,13 @@ def flush_queue(cfg: dict, store: Store, force: bool = False):
         store.db.execute("DELETE FROM queue WHERE kind='bid'")
         store.db.commit()
     items = store.take_best(int(cfg.get("batch_size", 3)), float(cfg.get("queue_max_age_hours", 3)),
-                            float(cfg.get("slab_share", 0.7)))
+                            float(cfg.get("slab_share", 0.7)), int(cfg.get("sealed_per_batch", 1)))
     for kind, data in items:
         try:
-            if kind in ("deal", "slab"):
+            if kind in ("deal", "slab", "sealed"):
                 dd = _deal_from_dict(data)
+                if dup_sent(store, dd):
+                    continue
                 remember_sent(store, dd)
                 send_deal(cfg, dd)
             else:
